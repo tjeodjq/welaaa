@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.2"
+PLUGIN_VERSION = "1.1.3"
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -183,11 +183,12 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 item_data = self._restore_original_title(item_data)
 
         gateway = self.get_db_gateway(db_type)
+        table = self._media_table(db_type)
         try:
             book = gateway.fetch_one(
-                """
+                f"""
                 SELECT id, file_path, library_id, series_name
-                FROM books
+                FROM {table}
                 WHERE id = ? AND COALESCE(is_deleted, 0) = 0
                 """,
                 (book_id,),
@@ -195,7 +196,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if not book:
                 return False, "대상 도서를 찾을 수 없습니다."
 
-            cover_filename = self._save_cover(book, item_data.get("cover"), cfg)
+            cover_filename = self._save_cover(book, item_data.get("cover"), cfg, db_type)
             description = self._clean_text(item_data.get("description"))
             author = self._clean_text(item_data.get("author"))
             publisher = self._clean_text(item_data.get("publisher")) or "윌라"
@@ -219,31 +220,26 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 and self._truthy(cfg.get("APPLY_COVER_TO_SERIES"))
             ):
                 series_cover_updates, _ = self._prepare_series_cover_files(
-                    gateway, book, raw_series_name
+                    gateway, book, raw_series_name, db_type
                 )
 
-            sql = """
-                UPDATE books
-                SET author = ?,
-                    isbn = COALESCE(?, isbn),
-                    publisher = ?,
-                    summary = ?,
-                    link = ?,
-                    release_date = COALESCE(?, release_date),
-                    genre = COALESCE(?, genre),
-                    tags = COALESCE(?, tags),
-                    score = COALESCE(?, score),
-                    cover_image = COALESCE(?, cover_image),
-                    cover_updated_at = CASE
+            set_parts = [
+                "author = ?",
+                "publisher = ?",
+                "summary = ?",
+                "link = ?",
+                "release_date = COALESCE(?, release_date)",
+                "genre = COALESCE(?, genre)",
+                "tags = COALESCE(?, tags)",
+                "score = COALESCE(?, score)",
+                "cover_image = COALESCE(?, cover_image)",
+                """cover_updated_at = CASE
                         WHEN ? IS NOT NULL THEN CURRENT_TIMESTAMP
                         ELSE cover_updated_at
-                    END,
-                    metadata_locked = 1
-                WHERE id = ? AND COALESCE(is_deleted, 0) = 0
-            """
+                    END""",
+            ]
             params = [
                 author,
-                isbn or None,
                 publisher,
                 description,
                 link,
@@ -253,19 +249,25 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 score,
                 cover_filename or None,
                 cover_filename or None,
-                book_id,
             ]
-            if str(db_type or "") == "audiobook" and narrator:
-                sql = sql.replace(
-                    "metadata_locked = 1",
-                    "narrator = COALESCE(?, narrator),\n                    metadata_locked = 1",
-                )
-                params.insert(-1, narrator)
+            if table != "videobooks":
+                set_parts.insert(1, "isbn = COALESCE(?, isbn)")
+                params.insert(1, isbn or None)
+            if table == "audiobooks" and narrator:
+                set_parts.append("narrator = COALESCE(?, narrator)")
+                params.append(narrator)
+            set_parts.append("metadata_locked = 1")
+            params.append(book_id)
+            sql = f"""
+                UPDATE {table}
+                SET {", ".join(set_parts)}
+                WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """
 
             count = gateway.execute(sql, tuple(params))
             if count == 0:
                 existing = gateway.fetch_one(
-                    "SELECT id FROM books WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+                    f"SELECT id FROM {table} WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
                     (book_id,),
                 )
                 count = 1 if existing else 0
@@ -274,8 +276,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
 
             if series_cover_updates:
                 gateway.execute_many(
-                    """
-                    UPDATE books
+                    f"""
+                    UPDATE {table}
                     SET cover_image = ?,
                         cover_updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
@@ -617,11 +619,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
         return urllib.request.build_opener(handler)
 
-    def _save_cover(self, book, cover_url, cfg):
+    def _save_cover(self, book, cover_url, cfg, db_type=None):
         if not cover_url:
             return None
         try:
-            dest_path, cover_filename = self._cover_location(book["library_id"], book["file_path"])
+            dest_path, cover_filename = self._cover_location(
+                book["library_id"], book["file_path"], db_type
+            )
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             req = urllib.request.Request(
                 cover_url,
@@ -637,11 +641,12 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             print(f"[WelaaaMetadataProvider] cover download failed: {e}")
             return None
 
-    def _prepare_series_cover_files(self, gateway, book, series_name):
+    def _prepare_series_cover_files(self, gateway, book, series_name, db_type=None):
+        table = self._media_table(db_type)
         series_books = gateway.fetch_all(
-            """
+            f"""
             SELECT id, file_path
-            FROM books
+            FROM {table}
             WHERE library_id = ?
               AND series_name = ?
               AND id <> ?
@@ -651,7 +656,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         )
         if not series_books:
             return [], 0
-        source_path, _ = self._cover_location(book["library_id"], book["file_path"])
+        source_path, _ = self._cover_location(book["library_id"], book["file_path"], db_type)
         if not os.path.isfile(source_path):
             return [], len(series_books)
         updates = []
@@ -659,7 +664,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         for series_book in series_books:
             try:
                 dest_path, cover_filename = self._cover_location(
-                    book["library_id"], series_book["file_path"]
+                    book["library_id"], series_book["file_path"], db_type
                 )
                 os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 shutil.copyfile(source_path, dest_path)
@@ -670,12 +675,25 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 failures += 1
         return updates, failures
 
-    def _cover_location(self, library_id, file_path):
+    @staticmethod
+    def _media_table(db_type):
+        raw = str(db_type or "").strip().lower()
+        if raw == "audiobook":
+            return "audiobooks"
+        if raw == "videobook":
+            return "videobooks"
+        return "books"
+
+    def _cover_location(self, library_id, file_path, db_type=None):
         if not file_path:
             raise ValueError("표지 파일명을 생성할 도서 경로가 없습니다.")
         base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
         book_hash = hashlib.md5(str(file_path).encode("utf-8")).hexdigest()
         filename = f"book_{book_hash}.webp"
+        kind = str(db_type or "").strip().lower()
+        if kind in ("audiobook", "videobook"):
+            rel = f"{kind}/{library_id}/{filename}"
+            return os.path.join(base_dir, "covers", kind, str(library_id), filename), rel
         return os.path.join(base_dir, "covers", str(library_id), filename), f"{library_id}/{filename}"
 
     def _parallel_map(self, func, values):
