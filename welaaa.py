@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.4"
+PLUGIN_VERSION = "1.1.5"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 POSTER_BG = (15, 23, 42)
@@ -807,61 +807,47 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         return ""
 
     def _best_cover(self, book):
-        scored = []
-        info = book.get("cover_image_info") if isinstance(book.get("cover_image_info"), dict) else {}
-        info_url = self._clean_text(info.get("url"))
-        if info_url.startswith("http"):
-            scored.append((self._poster_score(info.get("width"), info.get("height"), prefer_portrait=True), info_url))
+        service = str(book.get("service_type") or book.get("service_type_title") or "").lower()
+        is_course = service in ("klass", "class", "video", "클래스")
+        if is_course:
+            for key in ("klass_cover_image_url", "cover_image_url", "image_url"):
+                url = self._cover_http(book.get(key))
+                if url:
+                    return url
+            images = book.get("images") if isinstance(book.get("images"), dict) else {}
+            for key in ("wide", "large", "big", "main", "cover"):
+                url = self._cover_http(images.get(key))
+                if url:
+                    return url
 
         images = book.get("images") if isinstance(book.get("images"), dict) else {}
         for key in ("cover", "book", "large", "main", "big", "list", "wide"):
-            url = self._clean_text(images.get(key))
-            if url.startswith("http"):
-                scored.append((2 if key != "wide" else 0, url))
-
+            url = self._cover_http(images.get(key))
+            if url:
+                return url
         for key in ("cover_image_url", "klass_cover_image_url", "image_url"):
-            url = self._clean_text(book.get(key))
-            if url.startswith("http") and "placeholder" not in url and not url.endswith("/"):
-                scored.append((1 if key != "klass_cover_image_url" else 0, url))
-
+            url = self._cover_http(book.get(key))
+            if url:
+                return url
+        info = book.get("cover_image_info") if isinstance(book.get("cover_image_info"), dict) else {}
+        url = self._cover_http(info.get("url"))
+        if url:
+            return url
         info_list = book.get("cover_image_info_list") or []
         if isinstance(info_list, list):
             for row in info_list:
                 if not isinstance(row, dict):
                     continue
-                url = self._clean_text(row.get("url"))
-                if not url.startswith("http"):
-                    continue
-                bonus = 3 if str(row.get("image_source_type_string") or "") == "original-image" else 1
-                scored.append((self._poster_score(row.get("width"), row.get("height")) + bonus, url))
+                url = self._cover_http(row.get("url"))
+                if url:
+                    return url
+        return self._clean_text(book.get("cover_image_url"))
 
-        seen = set()
-        best_url = ""
-        best_score = -1
-        for score, url in scored:
-            if url in seen:
-                continue
-            seen.add(url)
-            if score > best_score:
-                best_score = score
-                best_url = url
-        return best_url or self._clean_text(book.get("cover_image_url"))
-
-    @staticmethod
-    def _poster_score(width, height, prefer_portrait=False):
-        try:
-            w = float(width)
-            h = float(height)
-        except (TypeError, ValueError):
-            return 1 if prefer_portrait else 0
-        if w <= 0 or h <= 0:
-            return 0
-        ratio = w / h
-        target = POSTER_WIDTH / POSTER_HEIGHT
-        closeness = max(0.0, 4.0 - abs(ratio - target) * 8.0)
-        if h >= w:
-            closeness += 2.0
-        return closeness
+    def _cover_http(self, value):
+        url = self._clean_text(value)
+        if url.startswith("http") and "placeholder" not in url and not url.endswith("/"):
+            return url
+        return ""
 
     @staticmethod
     def _fit_poster(img, target_w=POSTER_WIDTH, target_h=POSTER_HEIGHT):
