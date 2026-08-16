@@ -14,9 +14,11 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.6"
+PLUGIN_VERSION = "1.1.7"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
+VIDEOBOOK_POSTER_MAX_W = 1920
+VIDEOBOOK_POSTER_MAX_H = 1080
 POSTER_BG = (15, 23, 42)
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -137,7 +139,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "type": "checkbox",
             "required": False,
             "default": True,
-            "description": "가로로 넓은 클래스 이미지를 2:3 카드에 맞게 키우고, 빈 칸은 같은 그림의 흐린 배경으로 채웁니다.",
+            "description": "오디오북·전자책만 해당. 가로 이미지를 2:3 카드에 맞춥니다. 비디오북·클래스는 16:9를 유지합니다.",
         },
         {
             "key": "PROXY_URL",
@@ -207,7 +209,9 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if not book:
                 return False, "대상 도서를 찾을 수 없습니다."
 
-            cover_filename = self._save_cover(book, item_data.get("cover"), cfg, db_type)
+            cover_filename = self._save_cover(
+                book, item_data.get("cover"), cfg, db_type, item_data.get("service_type")
+            )
             description = self._clean_text(item_data.get("description"))
             author = self._clean_text(item_data.get("author"))
             publisher = self._clean_text(item_data.get("publisher")) or "윌라"
@@ -375,7 +379,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             or ""
         )
         publisher = self._clean_text((book.get("publisher") or {}).get("name") or "") or "윌라"
-        cover = self._best_cover(book)
+        cover = self._best_cover(book, kind)
         description = self._clean_text(
             book.get("description") or book.get("memo") or book.get("copy") or book.get("headline") or ""
         )
@@ -420,7 +424,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         kind = self._normalize_kind(kind)
         info = KIND_INFO[kind]
         web_id = str(hit.get("id") or "").strip()
-        cover = self._best_cover(hit)
+        cover = self._best_cover(hit, kind)
         teacher = hit.get("teacher") if isinstance(hit.get("teacher"), dict) else {}
         author = self._join_names(
             [hit.get("author_name"), teacher.get("headline"), teacher.get("name")]
@@ -626,7 +630,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
         return urllib.request.build_opener(handler)
 
-    def _save_cover(self, book, cover_url, cfg, db_type=None):
+    def _save_cover(self, book, cover_url, cfg, db_type=None, service_type=None):
         if not cover_url:
             return None
         try:
@@ -642,7 +646,12 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             with opener.open(req, timeout=15) as response:
                 img_data = response.read()
             with Image.open(io.BytesIO(img_data)) as img:
-                poster = self._fit_poster(img) if self._truthy(cfg.get("FIT_POSTER", True)) else img.convert("RGB")
+                if self._is_videobook_cover(db_type, service_type):
+                    poster = self._fit_videobook_poster(img)
+                elif self._truthy(cfg.get("FIT_POSTER", True)):
+                    poster = self._fit_poster(img)
+                else:
+                    poster = img.convert("RGB")
                 poster.save(dest_path, "WEBP", quality=82)
             return cover_filename
         except Exception as e:
@@ -806,16 +815,21 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return created[:10]
         return ""
 
-    def _best_cover(self, book):
+    def _best_cover(self, book, kind=None):
+        requested = self._normalize_kind(kind) if kind else ""
         service = str(book.get("service_type") or book.get("service_type_title") or "").lower()
-        is_course = service in ("klass", "class", "video", "클래스")
+        is_course = requested in ("video", "klass") or service in ("klass", "class", "video", "클래스")
         if is_course:
+            images = book.get("images") if isinstance(book.get("images"), dict) else {}
+            for key in ("wide", "large", "big", "main"):
+                url = self._cover_http(images.get(key))
+                if url:
+                    return url
             for key in ("klass_cover_image_url", "cover_image_url", "image_url"):
                 url = self._cover_http(book.get(key))
                 if url:
                     return url
-            images = book.get("images") if isinstance(book.get("images"), dict) else {}
-            for key in ("wide", "large", "big", "main", "cover"):
+            for key in ("cover",):
                 url = self._cover_http(images.get(key))
                 if url:
                     return url
@@ -848,6 +862,26 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if url.startswith("http") and "placeholder" not in url and not url.endswith("/"):
             return url
         return ""
+
+    @staticmethod
+    def _is_videobook_cover(db_type, service_type):
+        if str(db_type or "").strip().lower() == "videobook":
+            return True
+        return str(service_type or "").strip().lower() in (
+            "video", "klass", "class", "videobook",
+        )
+
+    @staticmethod
+    def _fit_videobook_poster(img, max_w=VIDEOBOOK_POSTER_MAX_W, max_h=VIDEOBOOK_POSTER_MAX_H):
+        """Keep 16:9 class/video posters. Downscale only; never crop to 2:3."""
+        src = img.convert("RGB")
+        if src.width <= max_w and src.height <= max_h:
+            return src
+        scale = min(max_w / float(src.width or 1), max_h / float(src.height or 1))
+        return src.resize(
+            (max(1, int(src.width * scale)), max(1, int(src.height * scale))),
+            Image.LANCZOS,
+        )
 
     @staticmethod
     def _fit_poster(img, target_w=POSTER_WIDTH, target_h=POSTER_HEIGHT):
