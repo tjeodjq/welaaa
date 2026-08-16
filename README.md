@@ -11,7 +11,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 
 ## 설치
 
-1. [Releases](https://github.com/tjeodjq/willa/releases)에서 `윌라_전용_플러그인.zip`을 받습니다.
+1. [Releases](https://github.com/tjeodjq/willa/releases)에서 `willa-1.1.0.zip`을 받습니다.
 2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 3. 목록에서 `윌라 도서 검색`을 활성화합니다.
 4. 도서 우클릭 메타 검색 드롭다운에서 `윌라 도서 검색`을 선택합니다.

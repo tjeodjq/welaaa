@@ -11,7 +11,7 @@
 
 ## 설치
 
-1. 이 ZIP을 BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
+1. [Releases](https://github.com/tjeodjq/willa/releases)의 `willa-1.1.0.zip`을 BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 2. 목록에서 `윌라 도서 검색`이 보이는지 확인한 뒤 활성화합니다.
 3. 도서 우클릭 메타 검색 드롭다운에서 `윌라 도서 검색`을 선택합니다.
 
