@@ -4,7 +4,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 
 | 항목 | 값 |
 | :--- | :--- |
-| 플러그인 버전 | `1.1.5` |
+| 플러그인 버전 | `1.1.6` |
 | 플러그인 ID | `welaaa` |
 | 클래스 | `WelaaaMetadataProvider` |
 | 유형 | 검색형 메타데이터 제공자 |
@@ -21,7 +21,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 
 ### ZIP 설치
 
-1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.5.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
+1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.6.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
 2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 
 설치 후 목록에서 `윌라 도서 검색`을 활성화하고, 도서 우클릭 메타 검색에서 선택합니다.
@@ -48,7 +48,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 - 정확한 제목만
 - 성인 결과 포함
 - 같은 시리즈 전체에 표지 적용
-- 포스터를 2:3 비율로 맞춤 (클래스 가로 이미지 잘림 방지)
+- 포스터를 2:3 비율로 맞춤 (가로 이미지는 키우고 빈 칸은 흐린 배경)
 - 선택: HTTP(S) 프록시, 윌라 Cookie
 
 ## 폴더 구조

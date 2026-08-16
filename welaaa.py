@@ -11,10 +11,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from html import unescape
 
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.5"
+PLUGIN_VERSION = "1.1.6"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 POSTER_BG = (15, 23, 42)
@@ -137,7 +137,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "type": "checkbox",
             "required": False,
             "default": True,
-            "description": "가로로 넓은 클래스 이미지를 상세 포스터 칸에 맞게 여백을 넣어 저장합니다. 끄면 원본 비율 그대로 저장합니다.",
+            "description": "가로로 넓은 클래스 이미지를 2:3 카드에 맞게 키우고, 빈 칸은 같은 그림의 흐린 배경으로 채웁니다.",
         },
         {
             "key": "PROXY_URL",
@@ -856,13 +856,30 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         target_ratio = target_w / float(target_h)
         if abs(src_ratio - target_ratio) < 0.08:
             return src.resize((target_w, target_h), Image.LANCZOS)
-        scale = min(target_w / src.width, target_h / src.height)
-        new_w = max(1, int(src.width * scale))
-        new_h = max(1, int(src.height * scale))
-        resized = src.resize((new_w, new_h), Image.LANCZOS)
-        canvas = Image.new("RGB", (target_w, target_h), POSTER_BG)
-        canvas.paste(resized, ((target_w - new_w) // 2, (target_h - new_h) // 2))
-        return canvas
+
+        cover_scale = max(target_w / src.width, target_h / src.height)
+        bg = src.resize(
+            (max(1, int(src.width * cover_scale)), max(1, int(src.height * cover_scale))),
+            Image.LANCZOS,
+        )
+        left = max(0, (bg.width - target_w) // 2)
+        top = max(0, (bg.height - target_h) // 2)
+        bg = bg.crop((left, top, left + target_w, top + target_h))
+        bg = bg.filter(ImageFilter.GaussianBlur(radius=22))
+        bg = ImageEnhance.Brightness(bg).enhance(0.55)
+
+        # 가로는 칸을 채우되, 너무 납작해지지 않게 높이를 조금 키운다.
+        min_h = int(target_h * 0.62) if src_ratio > target_ratio else 1
+        scale = max(min(target_w / src.width, target_h / src.height), min_h / float(src.height or 1))
+        fg = src.resize((max(1, int(src.width * scale)), max(1, int(src.height * scale))), Image.LANCZOS)
+        if fg.width > target_w:
+            x = (fg.width - target_w) // 2
+            fg = fg.crop((x, 0, x + target_w, fg.height))
+        if fg.height > target_h:
+            y = (fg.height - target_h) // 2
+            fg = fg.crop((0, y, fg.width, y + target_h))
+        bg.paste(fg, ((target_w - fg.width) // 2, (target_h - fg.height) // 2))
+        return bg
 
     def _genre_from_book(self, book):
         for badge in book.get("badges") or []:
