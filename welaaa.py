@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.1.1"
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -67,6 +67,15 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
     name = "윌라 도서 검색"
     version = PLUGIN_VERSION
     is_searchable = True
+    update_manifest = {
+        "enabled": True,
+        "provider": "github-raw",
+        "raw_base_url": "https://raw.githubusercontent.com/tjeodjq/welaaa/main",
+        "files": ["welaaa.py", "__init__.py", "README.md", "VERSION"],
+        "version_file": "VERSION",
+        "version_key": "plugin version",
+        "show_sample_update_button": True,
+    }
     config_schema = [
         {
             "key": "SEARCH_AUDIO",

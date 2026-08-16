@@ -4,19 +4,27 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 
 | 항목 | 값 |
 | :--- | :--- |
-| 플러그인 버전 | `1.1.0` |
+| 플러그인 버전 | `1.1.1` |
 | 플러그인 ID | `welaaa` |
 | 클래스 | `WelaaaMetadataProvider` |
 | 유형 | 검색형 메타데이터 제공자 |
 
 ## 설치
 
-1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.0.zip`을 받습니다.
-2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
-3. 목록에서 `윌라 도서 검색`을 활성화합니다.
-4. 도서 우클릭 메타 검색 드롭다운에서 `윌라 도서 검색`을 선택합니다.
+### Git URL 설치
 
-이미 설치한 경우 덮어쓰기(force)를 허용하면 됩니다. 이전 `willa` 플러그인을 썼다면 이 ZIP으로 다시 설치하세요.
+1. BookOasis **환경설정 → 플러그인 매니저 → Git 저장소 URL 설치**
+2. URL: `https://github.com/tjeodjq/welaaa`
+3. **Git 설치**
+
+이미 `welaaa`가 있으면 덮어쓰기(force)를 허용하면 됩니다.
+
+### ZIP 설치
+
+1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.1.zip`을 받습니다.
+2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
+
+설치 후 목록에서 `윌라 도서 검색`을 활성화하고, 도서 우클릭 메타 검색에서 선택합니다.
 
 ## 검색 대상
 
@@ -44,10 +52,11 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 
 ## 폴더 구조
 
+Git URL 설치용으로 플러그인 파일이 저장소 루트에 있습니다.
+
 ```text
-welaaa/
-├── __init__.py
-├── welaaa.py
-├── VERSION
-└── README.md
+__init__.py
+welaaa.py
+VERSION
+README.md
 ```
