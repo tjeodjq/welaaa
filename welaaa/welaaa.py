@@ -62,8 +62,8 @@ KIND_INFO = {
 }
 
 
-class WillaMetadataProvider(BaseMetadataProvider):
-    id = "willa"
+class WelaaaMetadataProvider(BaseMetadataProvider):
+    id = "welaaa"
     name = "윌라 도서 검색"
     version = PLUGIN_VERSION
     is_searchable = True
@@ -128,7 +128,7 @@ class WillaMetadataProvider(BaseMetadataProvider):
             "description": "선택. http://host:port 형식. 검색·상세·표지 다운로드에 적용됩니다.",
         },
         {
-            "key": "WILLA_COOKIE",
+            "key": "WELAAA_COOKIE",
             "label": "윌라 Cookie",
             "type": "password",
             "required": False,
@@ -282,14 +282,14 @@ class WillaMetadataProvider(BaseMetadataProvider):
     def get_context_menu_items(self, db_type, context):
         return [
             {
-                "id": "open_willa_search",
+                "id": "open_welaaa_search",
                 "label": "윌라에서 제목 검색",
                 "icon": "fa-solid fa-headphones",
             }
         ]
 
     def run_context_menu_action(self, db_type, action_id, context):
-        if action_id != "open_willa_search":
+        if action_id != "open_welaaa_search":
             return {"success": False, "error": f"지원하지 않는 액션입니다: {action_id}"}
         title = self._clean_text((context or {}).get("book_title"))
         if not title:
@@ -323,7 +323,7 @@ class WillaMetadataProvider(BaseMetadataProvider):
         try:
             html = self._http_text(url, cfg)
         except Exception as e:
-            print(f"[WillaMetadataProvider] detail fetch failed ({kind}/{web_id}): {e}")
+            print(f"[WelaaaMetadataProvider] detail fetch failed ({kind}/{web_id}): {e}")
             return None
         nxt = self.extract_next_data(html)
         if not nxt:
@@ -528,7 +528,7 @@ class WillaMetadataProvider(BaseMetadataProvider):
         try:
             cfg = self.get_plugin_config(db_type, default={}) or {}
         except Exception as e:
-            print(f"[WillaMetadataProvider] config load failed: {e}")
+            print(f"[WelaaaMetadataProvider] config load failed: {e}")
             cfg = {}
         return cfg if isinstance(cfg, dict) else {}
 
@@ -545,7 +545,7 @@ class WillaMetadataProvider(BaseMetadataProvider):
             "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
             "Referer": f"{SITE}/",
         }
-        cookie = self._clean_text(cfg.get("WILLA_COOKIE"))
+        cookie = self._clean_text(cfg.get("WELAAA_COOKIE"))
         if cookie:
             headers["Cookie"] = cookie
         req = urllib.request.Request(url, headers=headers)
@@ -591,7 +591,7 @@ class WillaMetadataProvider(BaseMetadataProvider):
                 img.save(dest_path, "WEBP", quality=82)
             return cover_filename
         except Exception as e:
-            print(f"[WillaMetadataProvider] cover download failed: {e}")
+            print(f"[WelaaaMetadataProvider] cover download failed: {e}")
             return None
 
     def _prepare_series_cover_files(self, gateway, book, series_name):
@@ -644,7 +644,7 @@ class WillaMetadataProvider(BaseMetadataProvider):
             try:
                 return func(value)
             except Exception as e:
-                print(f"[WillaMetadataProvider] detail enrich failed: {e}")
+                print(f"[WelaaaMetadataProvider] detail enrich failed: {e}")
                 return None
 
         if len(values) == 1:

@@ -5,18 +5,18 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 | 항목 | 값 |
 | :--- | :--- |
 | 플러그인 버전 | `1.1.0` |
-| 플러그인 ID | `willa` |
-| 클래스 | `WillaMetadataProvider` |
+| 플러그인 ID | `welaaa` |
+| 클래스 | `WelaaaMetadataProvider` |
 | 유형 | 검색형 메타데이터 제공자 |
 
 ## 설치
 
-1. [Releases](https://github.com/tjeodjq/willa/releases)에서 `willa-1.1.0.zip`을 받습니다.
+1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.0.zip`을 받습니다.
 2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 3. 목록에서 `윌라 도서 검색`을 활성화합니다.
 4. 도서 우클릭 메타 검색 드롭다운에서 `윌라 도서 검색`을 선택합니다.
 
-이미 설치한 경우 덮어쓰기(force)를 허용하면 됩니다.
+이미 설치한 경우 덮어쓰기(force)를 허용하면 됩니다. 이전 `willa` 플러그인을 썼다면 이 ZIP으로 다시 설치하세요.
 
 ## 검색 대상
 
@@ -45,9 +45,9 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다. �
 ## 폴더 구조
 
 ```text
-willa/
+welaaa/
 ├── __init__.py
-├── willa.py
+├── welaaa.py
 ├── VERSION
 └── README.md
 ```

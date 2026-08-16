@@ -1,26 +1,26 @@
 # 윌라 도서 검색
 
-윌라(welaaa.com) 오디오북·전자책 메타데이터를 제목 또는 web_id로 검색해 BookOasis 도서에 적용하는 **전용** 플러그인입니다. 네카리(네이버·카카오·리디) 플러그인과는 별도입니다.
+윌라(welaaa.com) 오디오북·전자책·비디오북·클래스 메타데이터를 제목 또는 web_id로 검색해 BookOasis 도서에 적용하는 **전용** 플러그인입니다. 네카리(네이버·카카오·리디) 플러그인과는 별도입니다.
 
 | 항목 | 값 |
 | :--- | :--- |
 | 플러그인 버전 | `1.1.0` |
-| 플러그인 ID | `willa` |
-| 클래스 | `WillaMetadataProvider` |
+| 플러그인 ID | `welaaa` |
+| 클래스 | `WelaaaMetadataProvider` |
 | 유형 | 검색형 메타데이터 제공자 |
 
 ## 설치
 
-1. [Releases](https://github.com/tjeodjq/willa/releases)의 `willa-1.1.0.zip`을 BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
+1. [Releases](https://github.com/tjeodjq/welaaa/releases)의 `welaaa-1.1.0.zip`을 BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 2. 목록에서 `윌라 도서 검색`이 보이는지 확인한 뒤 활성화합니다.
 3. 도서 우클릭 메타 검색 드롭다운에서 `윌라 도서 검색`을 선택합니다.
 
 최종 폴더:
 
 ```text
-plugins/metadata/willa/
+plugins/metadata/welaaa/
 ├── __init__.py
-├── willa.py
+├── welaaa.py
 ├── VERSION
 └── README.md
 ```
