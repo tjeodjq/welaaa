@@ -14,7 +14,10 @@ from html import unescape
 from PIL import Image
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.3"
+PLUGIN_VERSION = "1.1.4"
+POSTER_WIDTH = 600
+POSTER_HEIGHT = 900
+POSTER_BG = (15, 23, 42)
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -127,6 +130,14 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "type": "checkbox",
             "required": False,
             "default": True,
+        },
+        {
+            "key": "FIT_POSTER",
+            "label": "포스터를 2:3 비율로 맞춤",
+            "type": "checkbox",
+            "required": False,
+            "default": True,
+            "description": "가로로 넓은 클래스 이미지를 상세 포스터 칸에 맞게 여백을 넣어 저장합니다. 끄면 원본 비율 그대로 저장합니다.",
         },
         {
             "key": "PROXY_URL",
@@ -409,11 +420,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         kind = self._normalize_kind(kind)
         info = KIND_INFO[kind]
         web_id = str(hit.get("id") or "").strip()
-        cover = self._clean_text(
-            hit.get("cover_image_url")
-            or hit.get("klass_cover_image_url")
-            or ((hit.get("cover_image_info") or {}).get("url") if isinstance(hit.get("cover_image_info"), dict) else "")
-        )
+        cover = self._best_cover(hit)
         teacher = hit.get("teacher") if isinstance(hit.get("teacher"), dict) else {}
         author = self._join_names(
             [hit.get("author_name"), teacher.get("headline"), teacher.get("name")]
@@ -635,7 +642,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             with opener.open(req, timeout=15) as response:
                 img_data = response.read()
             with Image.open(io.BytesIO(img_data)) as img:
-                img.save(dest_path, "WEBP", quality=82)
+                poster = self._fit_poster(img) if self._truthy(cfg.get("FIT_POSTER", True)) else img.convert("RGB")
+                poster.save(dest_path, "WEBP", quality=82)
             return cover_filename
         except Exception as e:
             print(f"[WelaaaMetadataProvider] cover download failed: {e}")
@@ -799,27 +807,76 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         return ""
 
     def _best_cover(self, book):
+        scored = []
+        info = book.get("cover_image_info") if isinstance(book.get("cover_image_info"), dict) else {}
+        info_url = self._clean_text(info.get("url"))
+        if info_url.startswith("http"):
+            scored.append((self._poster_score(info.get("width"), info.get("height"), prefer_portrait=True), info_url))
+
         images = book.get("images") if isinstance(book.get("images"), dict) else {}
-        for key in ("large", "cover", "book", "main", "big", "wide", "list"):
+        for key in ("cover", "book", "large", "main", "big", "list", "wide"):
             url = self._clean_text(images.get(key))
             if url.startswith("http"):
-                return url
+                scored.append((2 if key != "wide" else 0, url))
+
         for key in ("cover_image_url", "klass_cover_image_url", "image_url"):
             url = self._clean_text(book.get(key))
             if url.startswith("http") and "placeholder" not in url and not url.endswith("/"):
-                return url
-        info = book.get("cover_image_info_list") or []
-        if isinstance(info, list):
-            for row in info:
-                if isinstance(row, dict) and str(row.get("image_source_type_string") or "") == "original-image":
-                    url = self._clean_text(row.get("url"))
-                    if url.startswith("http"):
-                        return url
-            for row in info:
-                url = self._clean_text((row or {}).get("url"))
-                if url.startswith("http"):
-                    return url
-        return self._clean_text(book.get("cover_image_url"))
+                scored.append((1 if key != "klass_cover_image_url" else 0, url))
+
+        info_list = book.get("cover_image_info_list") or []
+        if isinstance(info_list, list):
+            for row in info_list:
+                if not isinstance(row, dict):
+                    continue
+                url = self._clean_text(row.get("url"))
+                if not url.startswith("http"):
+                    continue
+                bonus = 3 if str(row.get("image_source_type_string") or "") == "original-image" else 1
+                scored.append((self._poster_score(row.get("width"), row.get("height")) + bonus, url))
+
+        seen = set()
+        best_url = ""
+        best_score = -1
+        for score, url in scored:
+            if url in seen:
+                continue
+            seen.add(url)
+            if score > best_score:
+                best_score = score
+                best_url = url
+        return best_url or self._clean_text(book.get("cover_image_url"))
+
+    @staticmethod
+    def _poster_score(width, height, prefer_portrait=False):
+        try:
+            w = float(width)
+            h = float(height)
+        except (TypeError, ValueError):
+            return 1 if prefer_portrait else 0
+        if w <= 0 or h <= 0:
+            return 0
+        ratio = w / h
+        target = POSTER_WIDTH / POSTER_HEIGHT
+        closeness = max(0.0, 4.0 - abs(ratio - target) * 8.0)
+        if h >= w:
+            closeness += 2.0
+        return closeness
+
+    @staticmethod
+    def _fit_poster(img, target_w=POSTER_WIDTH, target_h=POSTER_HEIGHT):
+        src = img.convert("RGB")
+        src_ratio = src.width / float(src.height or 1)
+        target_ratio = target_w / float(target_h)
+        if abs(src_ratio - target_ratio) < 0.08:
+            return src.resize((target_w, target_h), Image.LANCZOS)
+        scale = min(target_w / src.width, target_h / src.height)
+        new_w = max(1, int(src.width * scale))
+        new_h = max(1, int(src.height * scale))
+        resized = src.resize((new_w, new_h), Image.LANCZOS)
+        canvas = Image.new("RGB", (target_w, target_h), POSTER_BG)
+        canvas.paste(resized, ((target_w - new_w) // 2, (target_h - new_h) // 2))
+        return canvas
 
     def _genre_from_book(self, book):
         for badge in book.get("badges") or []:
