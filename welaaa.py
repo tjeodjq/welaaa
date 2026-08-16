@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.1"
+PLUGIN_VERSION = "1.1.2"
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -153,16 +153,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
 
         cfg = self._get_config(db_type)
         results = []
-        if parsed.get("web_id"):
-            kinds = [parsed["kind"]] if parsed.get("kind") else ("audio", "ebook", "video")
-            for kind in kinds:
-                item = self.fetch_detail_item(parsed["web_id"], kind, cfg)
-                if item:
-                    results.append(item)
-        else:
-            results.extend(self._search_by_title(parsed["query"], cfg))
+        try:
+            if parsed.get("web_id"):
+                kinds = [parsed["kind"]] if parsed.get("kind") else ("audio", "ebook", "video")
+                for kind in kinds:
+                    item = self.fetch_detail_item(parsed["web_id"], kind, cfg)
+                    if item:
+                        results.append(item)
+            else:
+                results.extend(self._search_by_title(parsed["query"], cfg))
+        except Exception as e:
+            print(f"[WelaaaMetadataProvider] search failed: {e}")
+            return []
 
-        results = [r for r in results if (r.get("cover") or "").strip()]
         results = self._dedupe(results)
         if not parsed.get("web_id"):
             results = self._filter_relevance(results, parsed["query"], cfg)
@@ -409,13 +412,15 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             or hit.get("klass_cover_image_url")
             or ((hit.get("cover_image_info") or {}).get("url") if isinstance(hit.get("cover_image_info"), dict) else "")
         )
-        author = self._clean_text(
-            hit.get("author_name") or ((hit.get("teacher") or {}).get("name") if isinstance(hit.get("teacher"), dict) else "")
+        teacher = hit.get("teacher") if isinstance(hit.get("teacher"), dict) else {}
+        author = self._join_names(
+            [hit.get("author_name"), teacher.get("headline"), teacher.get("name")]
         )
         description = self._clean_text(hit.get("subtitle") or hit.get("headline") or hit.get("copy") or "")
         score = self._score_from_meta(hit.get("meta") or {})
+        title = self._clean_text(hit.get("title") or hit.get("name"))
         return {
-            "title": self._clean_text(hit.get("title")),
+            "title": title,
             "author": author,
             "publisher": "윌라",
             "isbn": web_id,
@@ -431,7 +436,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "web_id": web_id,
             "external_id": web_id,
             "service_type": info["service"],
-            "raw_title": self._clean_text(hit.get("title")),
+            "raw_title": title,
             "is_adult": bool(hit.get("is_adult_content")),
         }
 
@@ -456,9 +461,14 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
 
     def _search_by_title(self, query, cfg):
         url = f"{SITE}/search-result?" + urllib.parse.urlencode({"search": query})
-        html = self._http_text(url, cfg)
+        try:
+            html = self._http_text(url, cfg)
+        except Exception as e:
+            print(f"[WelaaaMetadataProvider] search page fetch failed: {e}")
+            return []
         nxt = self.extract_next_data(html)
         if not nxt:
+            print("[WelaaaMetadataProvider] search page missing __NEXT_DATA__")
             return []
         props = (nxt.get("props") or {}).get("pageProps") or {}
         groups = []
@@ -502,7 +512,16 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         merged = []
         for hit in hits:
             key = (hit.get("service_type"), hit.get("web_id"))
-            merged.append(by_id.get(key) or hit)
+            detail = by_id.get(key)
+            if not detail:
+                merged.append(hit)
+                continue
+            if not self._clean_text(detail.get("cover")):
+                detail["cover"] = hit.get("cover") or ""
+            if not self._clean_text(detail.get("title")):
+                detail["title"] = hit.get("title") or ""
+                detail["raw_title"] = hit.get("raw_title") or detail["title"]
+            merged.append(detail)
         return merged
 
     @staticmethod
@@ -524,14 +543,29 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         nq = self._normalize(query)
         if not nq:
             return results
+        tokens = re.findall(r"[0-9a-zA-Z가-힣]{2,}", unescape(str(query or "")).lower())
         if self._truthy(cfg.get("SEARCH_EXACT")):
             return [r for r in results if self._normalize(r.get("raw_title") or r.get("title")) == nq]
-        return [
-            r
-            for r in results
-            if nq in self._normalize(r.get("raw_title") or r.get("title"))
-            or self._normalize(r.get("raw_title") or r.get("title")) in nq
-        ]
+
+        matched = []
+        for result in results:
+            blob = self._normalize(
+                " ".join(
+                    [
+                        str(result.get("raw_title") or ""),
+                        str(result.get("title") or ""),
+                        str(result.get("author") or ""),
+                        str(result.get("description") or ""),
+                    ]
+                )
+            )
+            raw_title = unescape(str(result.get("raw_title") or result.get("title") or "")).lower()
+            if nq in blob or blob in nq:
+                matched.append(result)
+            elif tokens and all(token in raw_title for token in tokens):
+                matched.append(result)
+        # 윌라가 이미 찾아 준 클래스/비디오는 제목 표기가 달라도 버리지 않는다.
+        return matched or results
 
     def _get_config(self, db_type):
         try:
