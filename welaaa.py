@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.20"
+PLUGIN_VERSION = "1.1.21"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -345,6 +345,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 )
 
             extra = f" (시리즈 표지 {len(series_cover_updates)}권)" if series_cover_updates else ""
+            if table == "videobooks":
+                self._sync_videobook_folder_meta(book, item_data)
             if table == "videobooks" and not cover_filename:
                 return False, (
                     f'"{title}" 저자·소개는 반영했지만 가로 클래스 표지를 저장하지 못했습니다.{extra}'
@@ -947,6 +949,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             else:
                 poster = src
             poster.save(dest_path, "WEBP", quality=82)
+            if videobook:
+                self._write_folder_poster(book.get("file_path"), poster)
             return cover_filename
         except Exception as e:
             print(f"[WelaaaMetadataProvider] cover download failed: {e}")
@@ -1292,6 +1296,62 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         except Exception:
             return None
         return None
+
+    def _write_folder_poster(self, file_path, image):
+        folder = os.path.dirname(str(file_path or "").strip())
+        if file_path and os.path.isdir(str(file_path).strip()):
+            folder = str(file_path).strip()
+        if not folder or not os.path.isdir(folder) or image is None:
+            return
+        try:
+            image.convert("RGB").save(os.path.join(folder, "poster.jpg"), "JPEG", quality=85)
+        except Exception as err:
+            print(f"[WelaaaMetadataProvider] folder poster update failed: {err}")
+
+    def _sync_videobook_folder_meta(self, book, item_data):
+        from datetime import datetime
+
+        file_path = ""
+        if book:
+            file_path = book["file_path"] if isinstance(book, dict) else self._row_value(book, "file_path")
+        folder = str(file_path or "").strip()
+        if folder and not os.path.isdir(folder):
+            folder = os.path.dirname(folder)
+        web_id = self._clean_text(
+            (item_data or {}).get("web_id") or (item_data or {}).get("external_id") or (item_data or {}).get("isbn")
+        )
+        if not folder or not os.path.isdir(folder) or not web_id.isdigit():
+            return
+        try:
+            from tools.scanner.metadata.welaaa_json import pick_applied_cover_url, upsert_welaaa_sidecar
+        except Exception as err:
+            print(f"[WelaaaMetadataProvider] folder JSON helper missing: {err}")
+            return
+        cover_url = pick_applied_cover_url(
+            (item_data or {}).get("cover"),
+            (item_data or {}).get("cover_candidates"),
+        )
+        updates = {
+            "type": "klass",
+            "content_id": web_id,
+            "web_id": web_id,
+            "title": self._clean_text((item_data or {}).get("title") or (item_data or {}).get("raw_title")),
+            "author_or_teacher": self._clean_text((item_data or {}).get("author")),
+            "summary": self._clean_text((item_data or {}).get("description")),
+            "cover_url": cover_url,
+            "publisher": self._clean_text((item_data or {}).get("publisher")) or "윌라",
+            "genre": self._clean_text((item_data or {}).get("genre")),
+            "link": self._canonical_link(web_id, "video"),
+            "updated_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "updated_from": "welaaa-apply",
+        }
+        tags = self._clean_text((item_data or {}).get("tags"))
+        if tags:
+            updates["keywords"] = [part.strip() for part in tags.split(",") if part.strip()]
+        try:
+            upsert_welaaa_sidecar(folder, updates)
+        except Exception as err:
+            print(f"[WelaaaMetadataProvider] folder JSON update failed: {err}")
 
     @staticmethod
     def _is_videobook_cover(db_type, service_type):
