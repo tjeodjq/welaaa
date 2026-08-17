@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.15"
+PLUGIN_VERSION = "1.1.16"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -1107,6 +1107,9 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             width = height = 0
         ratio = (width / float(height)) if width and height else 0.0
         score = 0
+        raw_url = str(url or "").lower()
+        if raw_url.endswith(("_big.jpg", "_big.png", "_big.webp")):
+            score -= 200
         if "klass-cover-alt" in blob or "cover-alt" in blob:
             score -= 60
         if "klass-cover" in blob and "alt" not in blob:
