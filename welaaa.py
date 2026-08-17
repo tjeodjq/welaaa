@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.19"
+PLUGIN_VERSION = "1.1.20"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -209,11 +209,22 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 item_data = {**detailed, **incoming}
                 item_data = self._restore_original_title(item_data)
                 if keep_detail_cover:
-                    # Search hits often only have portrait list thumbs.
-                    item_data["cover"] = detail_cover or item_data.get("cover")
-                    item_data["cover_candidates"] = (
-                        detail_candidates or item_data.get("cover_candidates")
-                    )
+                    # Search hits show landscape klass-cover; keep those URLs too.
+                    merged = []
+                    seen = set()
+                    for value in (
+                        detail_cover,
+                        incoming.get("cover"),
+                        *(detail_candidates or []),
+                        *(incoming.get("cover_candidates") or []),
+                    ):
+                        url = self._cover_http(value)
+                        if not url or url in seen:
+                            continue
+                        seen.add(url)
+                        merged.append(url)
+                    item_data["cover_candidates"] = merged
+                    item_data["cover"] = detail_cover or incoming.get("cover") or (merged[0] if merged else "")
                 if db_type == "videobook":
                     item_data["link"] = self._canonical_link(web_id, "video")
 
@@ -883,6 +894,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             fallback = None
             cookie = self._clean_text(cfg.get("WELAAA_COOKIE"))
             for cover_url in urls:
+                if videobook and self._is_dead_course_thumb(cover_url):
+                    continue
                 if videobook and self._cover_score(cover_url, course=True) < 0 and landscapes:
                     break
                 try:
@@ -916,9 +929,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                     print(f"[WelaaaMetadataProvider] cover candidate failed ({cover_url}): {err}")
             if videobook:
                 if not landscapes:
-                    print("[WelaaaMetadataProvider] no landscape cover candidate; skip portrait fallback")
-                    return None
-                src = max(landscapes, key=lambda item: item[0])[1]
+                    folder_src = self._folder_landscape_poster(book.get("file_path"))
+                    if folder_src is None:
+                        print("[WelaaaMetadataProvider] no landscape cover candidate; skip portrait fallback")
+                        return None
+                    src = folder_src
+                else:
+                    src = max(landscapes, key=lambda item: item[0])[1]
             else:
                 src = fallback
             if src is None:
@@ -1133,9 +1150,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if not url:
                 return
             score = self._cover_score(url, meta=meta, hint=hint, course=is_course)
+            informed = 0
+            if isinstance(meta, dict):
+                try:
+                    informed = 1 if int(meta.get("width") or 0) and int(meta.get("height") or 0) else 0
+                except (TypeError, ValueError):
+                    informed = 0
             prev = best.get(url)
-            if prev is None or score > prev:
-                best[url] = score
+            if prev is None:
+                best[url] = (score, informed)
+                return
+            prev_score, prev_inf = prev
+            if informed > prev_inf or (informed == prev_inf and score > prev_score):
+                best[url] = (score, informed)
 
         images = book.get("images") if isinstance(book.get("images"), dict) else {}
         for key, value in images.items():
@@ -1160,8 +1187,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 for k in ("image_type_string", "image_source_type_string")
             )
             add(row, meta=row, hint=hint)
-        ranked = sorted(best.items(), key=lambda item: item[1], reverse=True)
-        return [url for url, score in ranked if score > -100]
+        ranked = sorted(best.items(), key=lambda item: item[1][0], reverse=True)
+        return [url for url, (score, _inf) in ranked if score > -100]
 
     @staticmethod
     def _cover_score(url, meta=None, hint="", course=False):
@@ -1184,6 +1211,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         raw_url = str(url or "").lower()
         if raw_url.endswith(("_big.jpg", "_big.png", "_big.webp")):
             score -= 200
+        if "/static/courses/" in raw_url and any(
+            token in raw_url for token in ("_big.", "_list.", "_wide.")
+        ):
+            score -= 80
         if "klass-cover-alt" in blob or "cover-alt" in blob:
             score -= 60
         if "klass-cover" in blob and "alt" not in blob:
@@ -1229,6 +1260,38 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             .replace("_list.png", "_wide.png")
             .replace("_list.webp", "_wide.webp")
         )
+
+    @staticmethod
+    def _is_dead_course_thumb(url):
+        blob = str(url or "").lower()
+        if "/static/courses/" not in blob:
+            return False
+        return any(token in blob for token in ("_wide.jpg", "_list.jpg", "_big.jpg", "_wide.png", "_list.png", "_big.png"))
+
+    def _folder_landscape_poster(self, file_path):
+        folder = os.path.dirname(str(file_path or "").strip())
+        if not folder or not os.path.isdir(folder):
+            return None
+        try:
+            names = os.listdir(folder)
+        except Exception:
+            return None
+        lower_map = {name.lower(): name for name in names}
+        chosen = None
+        for candidate in ("poster.jpg", "poster.png", "poster.webp", "cover.jpg", "cover.png", "folder.jpg"):
+            if candidate in lower_map:
+                chosen = os.path.join(folder, lower_map[candidate])
+                break
+        if not chosen:
+            return None
+        try:
+            with Image.open(chosen) as img:
+                src = img.convert("RGB")
+                if src.width >= int(src.height * 1.2):
+                    return src.copy()
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _is_videobook_cover(db_type, service_type):
