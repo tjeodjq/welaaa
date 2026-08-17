@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.30"
+PLUGIN_VERSION = "1.1.31"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -1005,34 +1005,52 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
 
     def _html_openers(self, cfg):
         openers = []
+        proxy = self._clean_text((cfg or {}).get("PROXY_URL"))
+        if not proxy:
+            try:
+                from services.metadata_refresh_service import MetadataRefreshService
+                openers.append(MetadataRefreshService._image_openers(insecure=False))
+                openers.append(MetadataRefreshService._image_openers(insecure=True))
+            except Exception:
+                pass
         try:
             openers.append(self._opener(cfg))
         except Exception:
             openers.append(urllib.request.build_opener())
-        if self._clean_text((cfg or {}).get("PROXY_URL")):
-            return openers
+        return openers
+
+    @staticmethod
+    def _decode_http_bytes(raw):
+        raw = raw or b""
+        if raw[:2] == b"\x1f\x8b":
+            import gzip
+            raw = gzip.decompress(raw)
+        return raw.decode("utf-8", "replace")
+
+    @staticmethod
+    def _html_is_welaaa_detail(html):
         try:
             from services.metadata_refresh_service import MetadataRefreshService
-            openers.append(MetadataRefreshService._image_openers(insecure=False))
-            openers.append(MetadataRefreshService._image_openers(insecure=True))
+            return MetadataRefreshService.welaaa_html_is_detail(html)
         except Exception:
-            pass
-        return openers
+            text = str(html or "")
+            return "__NEXT_DATA__" in text or "cover_image_info_list" in text or "klass-cover" in text
 
     def _http_text_once(self, url, cfg, timeout=15):
         headers = {
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+            "Accept-Encoding": "identity",
             "Referer": f"{SITE}/",
         }
         cookie = self._clean_text(cfg.get("WELAAA_COOKIE"))
         if cookie:
             headers["Cookie"] = cookie
-        req = urllib.request.Request(url, headers=headers)
         last_err = None
         for opener in self._html_openers(cfg):
             try:
+                req = urllib.request.Request(url, headers=headers)
                 with opener.open(req, timeout=timeout) as resp:
                     chunks = []
                     total = 0
@@ -1045,9 +1063,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                         if total > max_bytes:
                             raise ValueError("윌라 응답이 너무 큽니다.")
                         chunks.append(chunk)
-                    html = b"".join(chunks).decode("utf-8", "replace")
-                if html:
+                    html = self._decode_http_bytes(b"".join(chunks))
+                if self._html_is_welaaa_detail(html):
                     return html
+                last_err = RuntimeError(
+                    f"윌라 상세가 아닌 응답 len={len(html)} head={html[:80]!r}"
+                )
+                print(f"[WelaaaMetadataProvider] skip stub html ({url}): {last_err}")
             except Exception as err:
                 last_err = err
                 continue
