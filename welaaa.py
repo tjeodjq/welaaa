@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.27"
+PLUGIN_VERSION = "1.1.28"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -598,9 +598,12 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
     def fetch_detail_item(self, web_id, kind, cfg):
         kind = self._normalize_kind(kind)
         info = KIND_INFO[kind]
+        self._last_detail_web_id = str(web_id)
+        self._last_detail_html = ""
         url = f"{SITE}/{info['path']}/detail/{web_id}"
         try:
             html = self._http_text(url, cfg)
+            self._last_detail_html = html or ""
         except Exception as e:
             print(f"[WelaaaMetadataProvider] detail fetch failed ({kind}/{web_id}): {e}")
             return None
@@ -1039,6 +1042,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 seen.add(wide)
                 urls.append(wide)
         if not urls:
+            self._last_cover_error = "가로 표지 URL이 없습니다"
             return None
         try:
             dest_path, cover_filename = self._cover_location(
