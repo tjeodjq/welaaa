@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.8"
+PLUGIN_VERSION = "1.1.9"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -194,8 +194,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if web_id:
             detailed = self.fetch_detail_item(web_id, kind, cfg)
             if detailed:
+                keep_detail_cover = self._is_videobook_cover(
+                    db_type, detailed.get("service_type") or item_data.get("service_type")
+                )
+                detail_cover = detailed.get("cover")
+                detail_candidates = list(detailed.get("cover_candidates") or [])
                 item_data = {**detailed, **{k: v for k, v in item_data.items() if v}}
                 item_data = self._restore_original_title(item_data)
+                if keep_detail_cover:
+                    # Search hits often only have portrait list thumbs.
+                    item_data["cover"] = detail_cover or item_data.get("cover")
+                    item_data["cover_candidates"] = (
+                        detail_candidates or item_data.get("cover_candidates")
+                    )
 
         gateway = self.get_db_gateway(db_type)
         table = self._media_table(db_type)
@@ -212,7 +223,12 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 return False, "대상 도서를 찾을 수 없습니다."
 
             cover_filename = self._save_cover(
-                book, item_data.get("cover"), cfg, db_type, item_data.get("service_type")
+                book,
+                item_data.get("cover"),
+                cfg,
+                db_type,
+                item_data.get("service_type"),
+                item_data.get("cover_candidates"),
             )
             description = self._clean_text(item_data.get("description"))
             author = self._clean_text(item_data.get("author"))
@@ -392,6 +408,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             cfg,
             db_type,
             detailed.get("service_type"),
+            detailed.get("cover_candidates"),
         )
         if not cover_filename:
             return False, "표지를 저장하지 못했습니다."
@@ -511,7 +528,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             or ""
         )
         publisher = self._clean_text((book.get("publisher") or {}).get("name") or "") or "윌라"
-        cover = self._best_cover(book, kind)
+        cover_candidates = self._cover_candidates(book, kind)
+        cover = cover_candidates[0] if cover_candidates else ""
         description = self._clean_text(
             book.get("description") or book.get("memo") or book.get("copy") or book.get("headline") or ""
         )
@@ -539,6 +557,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "isbn": isbn,
             "pubDate": pub_date,
             "cover": cover,
+            "cover_candidates": cover_candidates,
             "description": description,
             "link": link,
             "genre": genre,
@@ -762,29 +781,53 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
         return urllib.request.build_opener(handler)
 
-    def _save_cover(self, book, cover_url, cfg, db_type=None, service_type=None):
-        if not cover_url:
+    def _save_cover(self, book, cover_url, cfg, db_type=None, service_type=None, cover_candidates=None):
+        urls = []
+        seen = set()
+        for value in [cover_url, *(cover_candidates or [])]:
+            url = self._cover_http(value)
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+        if not urls:
             return None
         try:
             dest_path, cover_filename = self._cover_location(
                 book["library_id"], book["file_path"], db_type
             )
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            req = urllib.request.Request(
-                cover_url,
-                headers={"User-Agent": DEFAULT_USER_AGENT, "Referer": f"{SITE}/"},
-            )
             opener = self._opener(cfg)
-            with opener.open(req, timeout=15) as response:
-                img_data = response.read()
-            with Image.open(io.BytesIO(img_data)) as img:
-                if self._is_videobook_cover(db_type, service_type):
-                    poster = self._fit_videobook_poster(img)
-                elif self._truthy(cfg.get("FIT_POSTER", True)):
-                    poster = self._fit_poster(img)
-                else:
-                    poster = img.convert("RGB")
-                poster.save(dest_path, "WEBP", quality=82)
+            videobook = self._is_videobook_cover(db_type, service_type)
+            chosen = None
+            fallback = None
+            for cover_url in urls:
+                try:
+                    req = urllib.request.Request(
+                        cover_url,
+                        headers={"User-Agent": DEFAULT_USER_AGENT, "Referer": f"{SITE}/"},
+                    )
+                    with opener.open(req, timeout=15) as response:
+                        img_data = response.read()
+                    with Image.open(io.BytesIO(img_data)) as img:
+                        src = img.convert("RGB")
+                        if videobook and src.width >= int(src.height * 1.2):
+                            chosen = src.copy()
+                            break
+                        if fallback is None:
+                            fallback = src.copy()
+                except Exception as err:
+                    print(f"[WelaaaMetadataProvider] cover candidate failed ({cover_url}): {err}")
+            src = chosen or fallback
+            if src is None:
+                return None
+            if videobook:
+                poster = self._fit_videobook_poster(src)
+            elif self._truthy(cfg.get("FIT_POSTER", True)):
+                poster = self._fit_poster(src)
+            else:
+                poster = src
+            poster.save(dest_path, "WEBP", quality=82)
             return cover_filename
         except Exception as e:
             print(f"[WelaaaMetadataProvider] cover download failed: {e}")
@@ -948,50 +991,96 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         return ""
 
     def _best_cover(self, book, kind=None):
+        candidates = self._cover_candidates(book, kind)
+        return candidates[0] if candidates else ""
+
+    def _cover_candidates(self, book, kind=None):
         requested = self._normalize_kind(kind) if kind else ""
         service = str(book.get("service_type") or book.get("service_type_title") or "").lower()
         is_course = requested in ("video", "klass") or service in ("klass", "class", "video", "클래스")
-        if is_course:
-            images = book.get("images") if isinstance(book.get("images"), dict) else {}
-            for key in ("wide", "large", "big", "main"):
-                url = self._cover_http(images.get(key))
-                if url:
-                    return url
-            for key in ("klass_cover_image_url", "cover_image_url", "image_url"):
-                url = self._cover_http(book.get(key))
-                if url:
-                    return url
-            for key in ("cover",):
-                url = self._cover_http(images.get(key))
-                if url:
-                    return url
+        best = {}
+
+        def add(value, meta=None, hint=""):
+            url = self._cover_http(value)
+            if not url:
+                return
+            score = self._cover_score(url, meta=meta, hint=hint, course=is_course)
+            prev = best.get(url)
+            if prev is None or score > prev:
+                best[url] = score
 
         images = book.get("images") if isinstance(book.get("images"), dict) else {}
-        for key in ("cover", "book", "large", "main", "big", "list", "wide"):
-            url = self._cover_http(images.get(key))
-            if url:
-                return url
-        for key in ("cover_image_url", "klass_cover_image_url", "image_url"):
-            url = self._cover_http(book.get(key))
-            if url:
-                return url
+        for key, value in images.items():
+            add(value, hint=str(key))
+        img_set = book.get("img_set") if isinstance(book.get("img_set"), dict) else {}
+        for key, value in img_set.items():
+            add(value, hint=str(key))
+        for key in (
+            "klass_cover_image_url",
+            "cover_image_url",
+            "image_url",
+            "og_image",
+        ):
+            add(book.get(key), hint=key)
         info = book.get("cover_image_info") if isinstance(book.get("cover_image_info"), dict) else {}
-        url = self._cover_http(info.get("url"))
-        if url:
-            return url
-        info_list = book.get("cover_image_info_list") or []
-        if isinstance(info_list, list):
-            for row in info_list:
-                if not isinstance(row, dict):
-                    continue
-                url = self._cover_http(row.get("url"))
-                if url:
-                    return url
-        return self._clean_text(book.get("cover_image_url"))
+        add(info, meta=info, hint=str(info.get("image_type_string") or ""))
+        for row in book.get("cover_image_info_list") or []:
+            if not isinstance(row, dict):
+                continue
+            hint = " ".join(
+                str(row.get(k) or "")
+                for k in ("image_type_string", "image_source_type_string")
+            )
+            add(row, meta=row, hint=hint)
+        ranked = sorted(best.items(), key=lambda item: item[1], reverse=True)
+        return [url for url, score in ranked if score > -100]
+
+    @staticmethod
+    def _cover_score(url, meta=None, hint="", course=False):
+        meta = meta if isinstance(meta, dict) else {}
+        blob = " ".join(
+            [
+                str(url or "").lower(),
+                str(hint or "").lower(),
+                str(meta.get("image_type_string") or "").lower(),
+                str(meta.get("image_source_type_string") or "").lower(),
+            ]
+        )
+        score = 0
+        if "klass-cover-alt" in blob or "cover-alt" in blob:
+            score -= 60
+        if "klass-cover" in blob and "alt" not in blob:
+            score += 50
+        if any(token in blob for token in ("wide", "horizontal", "landscape", "banner")):
+            score += 35
+        if "original-image" in blob:
+            score += 20
+        if any(token in blob for token in ("list", "thumb", "portrait", "square")):
+            score -= 25
+        try:
+            width = int(meta.get("width") or 0)
+            height = int(meta.get("height") or 0)
+        except (TypeError, ValueError):
+            width = height = 0
+        if width and height:
+            ratio = width / float(height)
+            if ratio >= 1.4:
+                score += 90 + int((width * height) / 5000)
+            elif ratio < 0.95:
+                score -= 90
+        elif course and "list" in blob:
+            score -= 20
+        return score
 
     def _cover_http(self, value):
+        if isinstance(value, dict):
+            for key in ("url", "image_url", "src", "path"):
+                found = self._cover_http(value.get(key))
+                if found:
+                    return found
+            return ""
         url = self._clean_text(value)
-        if url.startswith("http") and "placeholder" not in url and not url.endswith("/"):
+        if url.startswith("http") and "placeholder" not in url.lower() and not url.endswith("/"):
             return url
         return ""
 
@@ -1005,8 +1094,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
 
     @staticmethod
     def _fit_videobook_poster(img, max_w=VIDEOBOOK_POSTER_MAX_W, max_h=VIDEOBOOK_POSTER_MAX_H):
-        """Keep 16:9 class/video posters. Downscale only; never crop to 2:3."""
+        """Keep 16:9 class/video posters. Crop landscape to 16:9; never crop portrait to 2:3."""
         src = img.convert("RGB")
+        ratio = src.width / float(src.height or 1)
+        target_ratio = 16 / 9.0
+        if ratio >= 1.2:
+            if ratio > target_ratio + 0.02:
+                new_w = max(1, int(src.height * target_ratio))
+                left = max(0, (src.width - new_w) // 2)
+                src = src.crop((left, 0, left + new_w, src.height))
+            elif ratio < target_ratio - 0.02:
+                new_h = max(1, int(src.width / target_ratio))
+                top = max(0, (src.height - new_h) // 2)
+                src = src.crop((0, top, src.width, top + new_h))
         if src.width <= max_w and src.height <= max_h:
             return src
         scale = min(max_w / float(src.width or 1), max_h / float(src.height or 1))
