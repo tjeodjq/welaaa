@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.16"
+PLUGIN_VERSION = "1.1.17"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -149,7 +150,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "type": "password",
             "required": False,
             "default": "",
-            "description": "선택. http://host:port 형식. 검색·상세·표지 다운로드에 적용됩니다.",
+            "description": "선택. 비워 두면 직접 연결합니다. 수동 검색과 자동 새로고침에 동일합니다. NAS가 welaaa.com에 닿지 못할 때만 입력하세요.",
         },
         {
             "key": "WELAAA_COOKIE",
@@ -157,7 +158,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "type": "password",
             "required": False,
             "default": "",
-            "description": "연령 제한 작품이 필요할 때만 입력합니다.",
+            "description": "선택. 비워 두면 됩니다. 연령 제한 작품이 필요할 때만 입력합니다. 수동 검색과 자동 새로고침에 동일합니다.",
         },
     ]
 
@@ -289,7 +290,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if table == "audiobooks" and narrator:
                 set_parts.append("narrator = COALESCE(?, narrator)")
                 params.append(narrator)
-            set_parts.append("metadata_locked = 1")
+            if not (table == "videobooks" and not cover_filename):
+                set_parts.append("metadata_locked = 1")
             params.append(book_id)
             sql = f"""
                 UPDATE {table}
@@ -322,6 +324,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 )
 
             extra = f" (시리즈 표지 {len(series_cover_updates)}권)" if series_cover_updates else ""
+            if table == "videobooks" and not cover_filename:
+                return False, (
+                    f'"{title}" 저자·소개는 반영했지만 가로 클래스 표지를 저장하지 못했습니다.{extra}'
+                )
             return True, f'"{title}" 윌라 메타데이터가 반영되었습니다.{extra}'
         except Exception as e:
             return False, f"DB 업데이트 오류: {e}"
@@ -779,6 +785,17 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return 20
 
     def _http_text(self, url, cfg, timeout=15):
+        last_err = None
+        for attempt in range(3):
+            try:
+                return self._http_text_once(url, cfg, timeout)
+            except Exception as err:
+                last_err = err
+                print(f"[WelaaaMetadataProvider] http retry {attempt + 1}/3 ({url}): {err}")
+                time.sleep(0.6 * (attempt + 1))
+        raise last_err
+
+    def _http_text_once(self, url, cfg, timeout=15):
         headers = {
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
@@ -843,9 +860,20 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                     headers = {"User-Agent": DEFAULT_USER_AGENT, "Referer": f"{SITE}/"}
                     if cookie:
                         headers["Cookie"] = cookie
-                    req = urllib.request.Request(cover_url, headers=headers)
-                    with opener.open(req, timeout=15) as response:
-                        img_data = response.read()
+                    img_data = None
+                    last_err = None
+                    for attempt in range(3):
+                        try:
+                            req = urllib.request.Request(cover_url, headers=headers)
+                            with opener.open(req, timeout=15) as response:
+                                img_data = response.read()
+                            last_err = None
+                            break
+                        except Exception as err:
+                            last_err = err
+                            time.sleep(0.5 * (attempt + 1))
+                    if img_data is None:
+                        raise last_err or RuntimeError("cover download failed")
                     with Image.open(io.BytesIO(img_data)) as img:
                         src = img.convert("RGB")
                         if videobook and src.width >= int(src.height * 1.2):
@@ -929,6 +957,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             base_dir = media_server_dir()
         except Exception:
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        kind = str(db_type or "").strip().lower()
+        if kind == "videobook":
+            stamp = int(time.time())
+            digest = hashlib.md5(str(file_path or existing_rel or stamp).encode("utf-8")).hexdigest()[:12]
+            filename = f"welaaa_{digest}_{stamp}.webp"
+            rel = f"videobook/{library_id}/{filename}"
+            return os.path.join(base_dir, "covers", "videobook", str(library_id), filename), rel
         rel = str(existing_rel or "").strip().split("?", 1)[0].replace("\\", "/").lstrip("/")
         if rel.lower().startswith("covers/"):
             rel = rel[7:]
@@ -936,8 +971,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return os.path.join(base_dir, "covers", *rel.split("/")), rel
         book_hash = hashlib.md5(str(file_path).encode("utf-8")).hexdigest()
         filename = f"book_{book_hash}.webp"
-        kind = str(db_type or "").strip().lower()
-        if kind in ("audiobook", "videobook"):
+        if kind == "audiobook":
             rel = f"{kind}/{library_id}/{filename}"
             return os.path.join(base_dir, "covers", kind, str(library_id), filename), rel
         return os.path.join(base_dir, "covers", str(library_id), filename), f"{library_id}/{filename}"
