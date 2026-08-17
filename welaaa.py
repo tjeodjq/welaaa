@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.17"
+PLUGIN_VERSION = "1.1.18"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -786,13 +786,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
 
     def _http_text(self, url, cfg, timeout=15):
         last_err = None
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 return self._http_text_once(url, cfg, timeout)
             except Exception as err:
                 last_err = err
-                print(f"[WelaaaMetadataProvider] http retry {attempt + 1}/3 ({url}): {err}")
-                time.sleep(0.6 * (attempt + 1))
+                print(f"[WelaaaMetadataProvider] http retry {attempt + 1}/2 ({url}): {err}")
+                time.sleep(0.4 * (attempt + 1))
         raise last_err
 
     def _http_text_once(self, url, cfg, timeout=15):
@@ -840,6 +840,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 continue
             seen.add(url)
             urls.append(url)
+            wide = self._widen_cover_url(url)
+            if wide and wide not in seen:
+                seen.add(wide)
+                urls.append(wide)
         if not urls:
             return None
         try:
@@ -862,7 +866,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                         headers["Cookie"] = cookie
                     img_data = None
                     last_err = None
-                    for attempt in range(3):
+                    for attempt in range(2):
                         try:
                             req = urllib.request.Request(cover_url, headers=headers)
                             with opener.open(req, timeout=15) as response:
@@ -871,7 +875,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                             break
                         except Exception as err:
                             last_err = err
-                            time.sleep(0.5 * (attempt + 1))
+                            time.sleep(0.4 * (attempt + 1))
                     if img_data is None:
                         raise last_err or RuntimeError("cover download failed")
                     with Image.open(io.BytesIO(img_data)) as img:
@@ -1177,6 +1181,18 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if url.startswith("http") and "placeholder" not in url.lower() and not url.endswith("/"):
             return url
         return ""
+
+    @staticmethod
+    def _widen_cover_url(url):
+        blob = str(url or "").strip()
+        if not blob:
+            return ""
+        return (
+            blob.replace("klass-cover-alt", "klass-cover")
+            .replace("_list.jpg", "_wide.jpg")
+            .replace("_list.png", "_wide.png")
+            .replace("_list.webp", "_wide.webp")
+        )
 
     @staticmethod
     def _is_videobook_cover(db_type, service_type):
