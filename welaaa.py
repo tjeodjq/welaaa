@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.13"
+PLUGIN_VERSION = "1.1.14"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -213,7 +213,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         try:
             book = gateway.fetch_one(
                 f"""
-                SELECT id, file_path, library_id, series_name
+                SELECT id, file_path, library_id, series_name, cover_image
                 FROM {table}
                 WHERE id = ? AND COALESCE(is_deleted, 0) = 0
                 """,
@@ -414,6 +414,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 "library_id": self._row_value(row, "library_id"),
                 "file_path": self._row_value(row, "file_path"),
                 "series_name": self._row_value(row, "series_name"),
+                "cover_image": self._row_value(row, "cover_image"),
             },
             detailed.get("cover"),
             cfg,
@@ -826,7 +827,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return None
         try:
             dest_path, cover_filename = self._cover_location(
-                book["library_id"], book["file_path"], db_type
+                book["library_id"], book["file_path"], db_type,
+                existing_rel=book.get("cover_image"),
             )
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             opener = self._opener(cfg)
@@ -914,10 +916,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return "videobooks"
         return "books"
 
-    def _cover_location(self, library_id, file_path, db_type=None):
-        if not file_path:
+    def _cover_location(self, library_id, file_path, db_type=None, existing_rel=None):
+        if not file_path and not existing_rel:
             raise ValueError("표지 파일명을 생성할 도서 경로가 없습니다.")
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        try:
+            from utils.cover_repair_targets import media_server_dir
+            base_dir = media_server_dir()
+        except Exception:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        rel = str(existing_rel or "").strip().split("?", 1)[0].replace("\\", "/").lstrip("/")
+        if rel.lower().startswith("covers/"):
+            rel = rel[7:]
+        if rel and ".." not in rel.split("/"):
+            return os.path.join(base_dir, "covers", *rel.split("/")), rel
         book_hash = hashlib.md5(str(file_path).encode("utf-8")).hexdigest()
         filename = f"book_{book_hash}.webp"
         kind = str(db_type or "").strip().lower()
