@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.11"
+PLUGIN_VERSION = "1.1.12"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -357,7 +357,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "link": link,
         }
 
-    def refresh(self, db_type, book_id, fields="cover", force_locked=True):
+    def refresh(self, db_type, book_id, fields="cover", force_locked=True, ident=None):
         field_set = {
             part.strip().lower()
             for part in str(fields or "cover").split(",")
@@ -381,8 +381,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if not force_locked and int(self._row_value(row, "metadata_locked", 0) or 0) == 1:
             return False, "메타데이터가 잠겨 있습니다."
 
-        ident = self.parse_refresh_identity(row)
-        if not ident:
+        parsed = self.parse_refresh_identity(row)
+        if parsed:
+            ident = parsed
+        elif ident and ident.get("web_id"):
+            ident = {
+                "provider_id": self.id,
+                "web_id": str(ident.get("web_id") or "").strip(),
+                "kind": str(ident.get("kind") or "video").strip() or "video",
+                "link": str(ident.get("link") or "").strip(),
+            }
+        else:
+            ident = None
+        if not ident or not ident.get("web_id"):
             return False, "윌라 식별자(link)가 없습니다."
 
         cfg = self._get_config(db_type)
@@ -819,7 +830,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             os.makedirs(os.path.dirname(dest_path), exist_ok=True)
             opener = self._opener(cfg)
             videobook = self._is_videobook_cover(db_type, service_type)
-            chosen = None
+            landscapes = []
             fallback = None
             for cover_url in urls:
                 try:
@@ -832,13 +843,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                     with Image.open(io.BytesIO(img_data)) as img:
                         src = img.convert("RGB")
                         if videobook and src.width >= int(src.height * 1.2):
-                            chosen = src.copy()
-                            break
+                            landscapes.append((src.width * src.height, src.copy()))
+                            continue
                         if fallback is None:
                             fallback = src.copy()
                 except Exception as err:
                     print(f"[WelaaaMetadataProvider] cover candidate failed ({cover_url}): {err}")
-            src = chosen or fallback
+            if videobook:
+                if not landscapes:
+                    print("[WelaaaMetadataProvider] no landscape cover candidate; skip portrait fallback")
+                    return None
+                src = max(landscapes, key=lambda item: item[0])[1]
+            else:
+                src = fallback
             if src is None:
                 return None
             if videobook:
@@ -1066,24 +1083,27 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 str(meta.get("image_source_type_string") or "").lower(),
             ]
         )
-        score = 0
-        if "klass-cover-alt" in blob or "cover-alt" in blob:
-            score -= 60
-        if "klass-cover" in blob and "alt" not in blob:
-            score += 50
-        if any(token in blob for token in ("wide", "horizontal", "landscape", "banner")):
-            score += 35
-        if "original-image" in blob:
-            score += 20
-        if any(token in blob for token in ("list", "thumb", "portrait", "square")):
-            score -= 25
         try:
             width = int(meta.get("width") or 0)
             height = int(meta.get("height") or 0)
         except (TypeError, ValueError):
             width = height = 0
+        ratio = (width / float(height)) if width and height else 0.0
+        score = 0
+        if "klass-cover-alt" in blob or "cover-alt" in blob:
+            score -= 60
+        if "klass-cover" in blob and "alt" not in blob:
+            if ratio and ratio < 0.95:
+                score -= 40
+            else:
+                score += 50
+        if any(token in blob for token in ("wide", "horizontal", "landscape", "banner", "main")):
+            score += 40
+        if "original-image" in blob:
+            score += 20
+        if any(token in blob for token in ("list", "thumb", "portrait", "square")):
+            score -= 25
         if width and height:
-            ratio = width / float(height)
             if ratio >= 1.4:
                 score += 90 + int((width * height) / 5000)
             elif ratio < 0.95:
