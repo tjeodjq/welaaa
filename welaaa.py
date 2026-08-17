@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.29"
+PLUGIN_VERSION = "1.1.30"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -246,16 +246,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                         merged.append(url)
                     item_data["cover_candidates"] = merged
                     item_data["cover"] = detail_cover or incoming.get("cover") or (merged[0] if merged else "")
-                    land = []
-                    seen_land = set()
-                    for value in detailed.get("landscape_covers") or []:
-                        url = self._cover_http(value)
-                        if not url or url in seen_land or self._is_dead_course_thumb(url):
-                            continue
-                        seen_land.add(url)
-                        land.append(url)
-                    if land:
-                        item_data["landscape_covers"] = land
+                    land = self._landscape_cover_urls_from_item(item_data)
+                    item_data["landscape_covers"] = land
+                    if land and not self._clean_text(item_data.get("cover")):
+                        item_data["cover"] = land[0]
                 if db_type == "videobook":
                     item_data["link"] = self._canonical_link(web_id, "video")
 
@@ -273,7 +267,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if not book:
                 return False, "대상 도서를 찾을 수 없습니다."
 
-            land = self._merge_cover_urls(item_data.get("landscape_covers"))
+            land = self._landscape_cover_urls_from_item(item_data) if db_type == "videobook" else []
             if db_type == "videobook":
                 cover_urls = land
                 first_cover = cover_urls[0] if cover_urls else ""
@@ -282,6 +276,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                     item_data.get("cover"),
                     item_data.get("cover_candidates"),
                 )
+                land = self._merge_cover_urls(item_data.get("landscape_covers"))
                 cover_urls = land + [url for url in rest if url not in land]
                 first_cover = cover_urls[0] if cover_urls else item_data.get("cover")
             cover_filename = self._save_cover(
@@ -488,12 +483,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if "text" in field_set:
             return self.apply(db_type, book_id, detailed)
 
-        land = self._merge_cover_urls(detailed.get("landscape_covers"))
+        land = self._landscape_cover_urls_from_item(detailed) if db_type == "videobook" else []
         if db_type == "videobook":
             cover_urls = land
             first_cover = cover_urls[0] if cover_urls else ""
         else:
             rest = self._merge_cover_urls(detailed.get("cover"), detailed.get("cover_candidates"))
+            land = self._merge_cover_urls(detailed.get("landscape_covers"))
             cover_urls = land + [url for url in rest if url not in land]
             first_cover = cover_urls[0] if cover_urls else detailed.get("cover")
         cover_filename = self._save_cover(
@@ -704,7 +700,11 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 continue
             seen_land.add(url)
             land.append(url)
-        item["landscape_covers"] = land
+        item["landscape_covers"] = self._landscape_cover_urls_from_item(
+            {**item, "landscape_covers": land}
+        )
+        if item["landscape_covers"] and not self._clean_text(item.get("cover")):
+            item["cover"] = item["landscape_covers"][0]
         return item
 
     @staticmethod
@@ -751,6 +751,14 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         publisher = self._clean_text((book.get("publisher") or {}).get("name") or "") or "윌라"
         cover_candidates = self._cover_candidates(book, kind)
         cover = cover_candidates[0] if cover_candidates else ""
+        images = book.get("images") if isinstance(book.get("images"), dict) else {}
+        landscape_covers = self._landscape_cover_urls_from_item(
+            {
+                "cover": cover,
+                "cover_candidates": cover_candidates,
+                "images": images,
+            }
+        )
         description = self._clean_text(
             book.get("description") or book.get("memo") or book.get("copy") or book.get("headline") or ""
         )
@@ -779,6 +787,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "pubDate": pub_date,
             "cover": cover,
             "cover_candidates": cover_candidates,
+            "landscape_covers": landscape_covers,
             "description": description,
             "link": link,
             "genre": genre,
@@ -790,14 +799,23 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "external_id": web_id,
             "service_type": info["service"],
             "raw_title": self._clean_text(book.get("title")),
-            "images": book.get("images") if isinstance(book.get("images"), dict) else {},
+            "images": images,
         }
 
     def item_from_search_hit(self, hit, kind):
         kind = self._normalize_kind(kind)
         info = KIND_INFO[kind]
         web_id = str(hit.get("id") or "").strip()
-        cover = self._best_cover(hit, kind)
+        cover_candidates = self._cover_candidates(hit, kind)
+        cover = cover_candidates[0] if cover_candidates else ""
+        images = hit.get("images") if isinstance(hit.get("images"), dict) else {}
+        landscape_covers = self._landscape_cover_urls_from_item(
+            {
+                "cover": cover,
+                "cover_candidates": cover_candidates,
+                "images": images,
+            }
+        )
         teacher = hit.get("teacher") if isinstance(hit.get("teacher"), dict) else {}
         author = self._join_names(
             [hit.get("author_name"), teacher.get("headline"), teacher.get("name")]
@@ -812,6 +830,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "isbn": web_id,
             "pubDate": "",
             "cover": cover,
+            "cover_candidates": cover_candidates,
+            "landscape_covers": landscape_covers,
             "description": description,
             "link": f"{SITE}/{info['path']}/detail/{web_id}" if web_id else SITE,
             "genre": "",
@@ -824,6 +844,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "service_type": info["service"],
             "raw_title": title,
             "is_adult": bool(hit.get("is_adult_content")),
+            "images": images,
         }
 
     @staticmethod
@@ -904,6 +925,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 continue
             if not self._clean_text(detail.get("cover")):
                 detail["cover"] = hit.get("cover") or ""
+            if not (detail.get("landscape_covers") or []):
+                detail["landscape_covers"] = self._landscape_cover_urls_from_item(hit)
+            if not self._clean_text(detail.get("cover")) and detail.get("landscape_covers"):
+                detail["cover"] = detail["landscape_covers"][0]
             if not self._clean_text(detail.get("title")):
                 detail["title"] = hit.get("title") or ""
                 detail["raw_title"] = hit.get("raw_title") or detail["title"]
@@ -1500,6 +1525,30 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 seen.add(url)
                 urls.append(url)
         return urls
+
+    def _landscape_cover_urls_from_item(self, item_data):
+        """Search preview cover is often landscape but not copied into landscape_covers."""
+        item_data = item_data or {}
+        images = item_data.get("images") if isinstance(item_data.get("images"), dict) else {}
+        urls = self._merge_cover_urls(
+            item_data.get("landscape_covers"),
+            images.get("wide"),
+            images.get("big"),
+            images.get("banner"),
+            images.get("main"),
+            item_data.get("cover"),
+            item_data.get("cover_candidates"),
+        )
+        return [url for url in urls if not self._looks_like_portrait_cover(url)]
+
+    @staticmethod
+    def _looks_like_portrait_cover(url):
+        low = str(url or "").lower()
+        if "klass-cover-alt" in low or "cover-alt" in low:
+            return True
+        if any(token in low for token in ("/thumb", "portrait", "_list.")):
+            return True
+        return False
 
     @staticmethod
     def _widen_cover_url(url):
