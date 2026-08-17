@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.10"
+PLUGIN_VERSION = "1.1.11"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -515,8 +515,28 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             book = props.get("book") or props.get("ebook") or props.get("course")
         if not isinstance(book, dict) or not book.get("title"):
             return None
+        og = self._og_image(html)
+        if og:
+            book = dict(book)
+            book["og_image"] = og
         resolved = self._kind_from_course(book, kind)
         return self.item_from_book(book, resolved)
+
+    @staticmethod
+    def _og_image(html):
+        text = str(html or "")
+        match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+            text,
+            re.I,
+        )
+        if not match:
+            match = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+                text,
+                re.I,
+            )
+        return unescape(match.group(1)).strip() if match else ""
 
     def item_from_book(self, book, kind):
         kind = self._normalize_kind(kind)
