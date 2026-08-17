@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.7"
+PLUGIN_VERSION = "1.1.8"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -72,6 +72,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
     name = "윌라 도서 검색"
     version = PLUGIN_VERSION
     is_searchable = True
+    supports_refresh = True
+    refresh_media_types = ("videobook",)
     update_manifest = {
         "enabled": True,
         "provider": "github-raw",
@@ -307,6 +309,136 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return True, f'"{title}" 윌라 메타데이터가 반영되었습니다.{extra}'
         except Exception as e:
             return False, f"DB 업데이트 오류: {e}"
+
+    @staticmethod
+    def _row_value(row, key, default=None):
+        if row is None:
+            return default
+        try:
+            if isinstance(row, dict):
+                val = row.get(key, default)
+            elif hasattr(row, "keys") and key in row.keys():
+                val = row[key]
+            else:
+                val = default
+        except Exception:
+            return default
+        return default if val is None else val
+
+    def parse_refresh_identity(self, row):
+        link = self._clean_text(self._row_value(row, "link"))
+        if not link:
+            return None
+        parsed = self.parse_query(link)
+        web_id = self._clean_text(parsed.get("web_id"))
+        if not web_id:
+            return None
+        kind = self._clean_text(parsed.get("kind")) or "video"
+        return {
+            "provider_id": self.id,
+            "web_id": web_id,
+            "kind": kind,
+            "link": link,
+        }
+
+    def refresh(self, db_type, book_id, fields="cover", force_locked=True):
+        field_set = {
+            part.strip().lower()
+            for part in str(fields or "cover").split(",")
+            if part.strip()
+        }
+        if "cover" not in field_set:
+            field_set.add("cover")
+
+        gateway = self.get_db_gateway(db_type)
+        table = self._media_table(db_type)
+        row = gateway.fetch_one(
+            f"""
+            SELECT *
+            FROM {table}
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (book_id,),
+        )
+        if not row:
+            return False, "대상 도서를 찾을 수 없습니다."
+        if not force_locked and int(self._row_value(row, "metadata_locked", 0) or 0) == 1:
+            return False, "메타데이터가 잠겨 있습니다."
+
+        ident = self.parse_refresh_identity(row)
+        if not ident:
+            return False, "윌라 식별자(link)가 없습니다."
+
+        cfg = self._get_config(db_type)
+        kind = ident.get("kind") or "video"
+        detailed = self.fetch_detail_item(ident["web_id"], kind, cfg)
+        if not detailed and kind in ("video", "klass"):
+            other = "klass" if kind == "video" else "video"
+            detailed = self.fetch_detail_item(ident["web_id"], other, cfg)
+        if not detailed:
+            return False, "윌라 상세를 가져오지 못했습니다."
+
+        if "text" in field_set:
+            return self.apply(db_type, book_id, detailed)
+
+        cover_filename = self._save_cover(
+            {
+                "id": self._row_value(row, "id"),
+                "library_id": self._row_value(row, "library_id"),
+                "file_path": self._row_value(row, "file_path"),
+                "series_name": self._row_value(row, "series_name"),
+            },
+            detailed.get("cover"),
+            cfg,
+            db_type,
+            detailed.get("service_type"),
+        )
+        if not cover_filename:
+            return False, "표지를 저장하지 못했습니다."
+        link = self._clean_text(detailed.get("link") or ident.get("link"))
+        gateway.execute(
+            f"""
+            UPDATE {table}
+            SET cover_image = ?,
+                cover_updated_at = CURRENT_TIMESTAMP,
+                link = CASE WHEN TRIM(COALESCE(?, '')) = '' THEN link ELSE ? END
+            WHERE id = ? AND COALESCE(is_deleted, 0) = 0
+            """,
+            (cover_filename, link, link, book_id),
+        )
+        extra = ""
+        raw_series_name = self._clean_text(self._row_value(row, "series_name"))
+        if (
+            raw_series_name
+            and self._row_value(row, "library_id") is not None
+            and self._truthy(cfg.get("APPLY_COVER_TO_SERIES"))
+        ):
+            series_cover_updates, _ = self._prepare_series_cover_files(
+                gateway,
+                {
+                    "id": self._row_value(row, "id"),
+                    "library_id": self._row_value(row, "library_id"),
+                    "file_path": self._row_value(row, "file_path"),
+                },
+                raw_series_name,
+                db_type,
+            )
+            if series_cover_updates:
+                gateway.execute_many(
+                    f"""
+                    UPDATE {table}
+                    SET cover_image = ?,
+                        cover_updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                      AND library_id = ?
+                      AND series_name = ?
+                      AND COALESCE(is_deleted, 0) = 0
+                    """,
+                    series_cover_updates,
+                )
+                extra = f" (시리즈 표지 {len(series_cover_updates)}권)"
+        title = self._clean_text(detailed.get("title")) or "윌라 콘텐츠"
+        return True, f'"{title}" 윌라 표지를 새로고침했습니다.{extra}'
 
     def get_context_menu_items(self, db_type, context):
         return [
