@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.22"
+PLUGIN_VERSION = "1.1.23"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -348,8 +348,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if table == "videobooks":
                 self._sync_videobook_folder_meta(book, item_data)
             if table == "videobooks" and not cover_filename:
+                why = self._clean_text(getattr(self, "_last_cover_error", ""))
+                extra_why = f" ({why})" if why else ""
                 return False, (
-                    f'"{title}" 저자·소개는 반영했지만 가로 클래스 표지를 저장하지 못했습니다.{extra}'
+                    f'"{title}" 저자·소개는 반영했지만 가로 클래스 표지를 저장하지 못했습니다.{extra}{extra_why}'
                 )
             return True, f'"{title}" 윌라 메타데이터가 반영되었습니다.{extra}'
         except Exception as e:
@@ -914,6 +916,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             landscapes = []
             fallback = None
             cookie = self._clean_text(cfg.get("WELAAA_COOKIE"))
+            last_err = None
             for cover_url in urls:
                 if videobook and self._is_dead_course_thumb(cover_url):
                     continue
@@ -969,11 +972,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                         if fallback is None:
                             fallback = src.copy()
                 except Exception as err:
+                    last_err = err
                     print(f"[WelaaaMetadataProvider] cover candidate failed ({cover_url}): {err}")
             if videobook:
                 if not landscapes:
                     folder_src = self._folder_landscape_poster(book.get("file_path"))
                     if folder_src is None:
+                        self._last_cover_error = str(last_err or "no landscape")
                         print("[WelaaaMetadataProvider] no landscape cover candidate; skip portrait fallback")
                         return None
                     src = folder_src
@@ -992,8 +997,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             poster.save(dest_path, "WEBP", quality=82)
             if videobook:
                 self._write_folder_poster(book.get("file_path"), poster)
+            self._last_cover_error = ""
             return cover_filename
         except Exception as e:
+            self._last_cover_error = str(e)
             print(f"[WelaaaMetadataProvider] cover download failed: {e}")
             return None
 
@@ -1314,29 +1321,35 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         return any(token in blob for token in ("_wide.jpg", "_list.jpg", "_big.jpg", "_wide.png", "_list.png", "_big.png"))
 
     def _folder_landscape_poster(self, file_path):
-        folder = os.path.dirname(str(file_path or "").strip())
+        folder = str(file_path or "").strip()
+        if folder and not os.path.isdir(folder):
+            folder = os.path.dirname(folder)
         if not folder or not os.path.isdir(folder):
             return None
         try:
             names = os.listdir(folder)
         except Exception:
             return None
-        lower_map = {name.lower(): name for name in names}
-        chosen = None
-        for candidate in ("poster.jpg", "poster.png", "poster.webp", "cover.jpg", "cover.png", "folder.jpg"):
-            if candidate in lower_map:
-                chosen = os.path.join(folder, lower_map[candidate])
-                break
-        if not chosen:
-            return None
-        try:
-            with Image.open(chosen) as img:
-                src = img.convert("RGB")
-                if src.width >= int(src.height * 1.2):
-                    return src.copy()
-        except Exception:
-            return None
-        return None
+        best = None
+        best_px = 0
+        for name in names:
+            low = str(name).lower()
+            if not low.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                continue
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with Image.open(path) as img:
+                    src = img.convert("RGB")
+                    if src.width >= int(src.height * 1.2):
+                        px = src.width * src.height
+                        if px > best_px:
+                            best_px = px
+                            best = src.copy()
+            except Exception:
+                continue
+        return best
 
     def _write_folder_poster(self, file_path, image):
         folder = os.path.dirname(str(file_path or "").strip())
