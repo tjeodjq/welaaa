@@ -3,7 +3,7 @@
 BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 | 항목 | 값 |
 | :--- | :--- |
-| 플러그인 버전 | `1.1.9` |
+| 플러그인 버전 | `1.1.10` |
 | 플러그인 ID | `welaaa` |
 | 클래스 | `WelaaaMetadataProvider` |
 | 유형 | 검색형 메타데이터 제공자 |
@@ -20,7 +20,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 
 ### ZIP 설치
 
-1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.9.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
+1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.10.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
 2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 
 설치 후 목록에서 `윌라 도서 검색`을 활성화하고, 도서 우클릭 메타 검색에서 선택합니다.
@@ -43,7 +43,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 
 ## 식별자 기반 새로고침
 
-비디오북 Health/카테고리의 「메타·포스터 새로고침」은 제목 검색 없이 `link`의 `welaaa.com/(video|audio|ebook)/detail/{id}` 만 사용합니다. 기본은 표지만 16:9 가로 클래스 아트(`klass-cover` original)로 다시 받고 `metadata_locked`는 유지합니다. 검색 결과의 세로 `list` 썸네일로 덮지 않습니다.
+비디오북 Health/카테고리의 「메타·포스터 새로고침」은 제목 검색 없이 `link`의 `welaaa.com/(video|audio|ebook)/detail/{id}` 만 사용합니다. 기본은 표지만 16:9 캔버스에 **여백으로 맞춤**(크롭 없음)으로 다시 받고 `metadata_locked`는 유지합니다. 검색 결과의 세로 `list` 썸네일로 덮지 않습니다.
 
 ## 설정
 

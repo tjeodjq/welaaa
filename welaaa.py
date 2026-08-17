@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.9"
+PLUGIN_VERSION = "1.1.10"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -1094,26 +1094,31 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
 
     @staticmethod
     def _fit_videobook_poster(img, max_w=VIDEOBOOK_POSTER_MAX_W, max_h=VIDEOBOOK_POSTER_MAX_H):
-        """Keep 16:9 class/video posters. Crop landscape to 16:9; never crop portrait to 2:3."""
+        """Pad to 16:9 (contain). Never crop class artwork to fill the box."""
         src = img.convert("RGB")
-        ratio = src.width / float(src.height or 1)
         target_ratio = 16 / 9.0
-        if ratio >= 1.2:
-            if ratio > target_ratio + 0.02:
-                new_w = max(1, int(src.height * target_ratio))
-                left = max(0, (src.width - new_w) // 2)
-                src = src.crop((left, 0, left + new_w, src.height))
-            elif ratio < target_ratio - 0.02:
-                new_h = max(1, int(src.width / target_ratio))
-                top = max(0, (src.height - new_h) // 2)
-                src = src.crop((0, top, src.width, top + new_h))
-        if src.width <= max_w and src.height <= max_h:
-            return src
-        scale = min(max_w / float(src.width or 1), max_h / float(src.height or 1))
-        return src.resize(
-            (max(1, int(src.width * scale)), max(1, int(src.height * scale))),
-            Image.LANCZOS,
-        )
+        src_w = max(1, src.width)
+        src_h = max(1, src.height)
+        src_ratio = src_w / float(src_h)
+        if src_ratio >= target_ratio:
+            canvas_w = min(src_w, max_w)
+            canvas_h = max(1, int(round(canvas_w / target_ratio)))
+            if canvas_h > max_h:
+                canvas_h = max_h
+                canvas_w = max(1, int(round(canvas_h * target_ratio)))
+        else:
+            canvas_h = min(src_h, max_h)
+            canvas_w = max(1, int(round(canvas_h * target_ratio)))
+            if canvas_w > max_w:
+                canvas_w = max_w
+                canvas_h = max(1, int(round(canvas_w / target_ratio)))
+        scale = min(canvas_w / float(src_w), canvas_h / float(src_h))
+        fg_w = max(1, int(round(src_w * scale)))
+        fg_h = max(1, int(round(src_h * scale)))
+        fg = src if (fg_w == src_w and fg_h == src_h) else src.resize((fg_w, fg_h), Image.LANCZOS)
+        canvas = Image.new("RGB", (canvas_w, canvas_h), POSTER_BG)
+        canvas.paste(fg, ((canvas_w - fg_w) // 2, (canvas_h - fg_h) // 2))
+        return canvas
 
     @staticmethod
     def _fit_poster(img, target_w=POSTER_WIDTH, target_h=POSTER_HEIGHT):
