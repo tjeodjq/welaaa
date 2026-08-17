@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.14"
+PLUGIN_VERSION = "1.1.15"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -835,18 +835,23 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             videobook = self._is_videobook_cover(db_type, service_type)
             landscapes = []
             fallback = None
+            cookie = self._clean_text(cfg.get("WELAAA_COOKIE"))
             for cover_url in urls:
+                if videobook and self._cover_score(cover_url, course=True) < 0 and landscapes:
+                    break
                 try:
-                    req = urllib.request.Request(
-                        cover_url,
-                        headers={"User-Agent": DEFAULT_USER_AGENT, "Referer": f"{SITE}/"},
-                    )
+                    headers = {"User-Agent": DEFAULT_USER_AGENT, "Referer": f"{SITE}/"}
+                    if cookie:
+                        headers["Cookie"] = cookie
+                    req = urllib.request.Request(cover_url, headers=headers)
                     with opener.open(req, timeout=15) as response:
                         img_data = response.read()
                     with Image.open(io.BytesIO(img_data)) as img:
                         src = img.convert("RGB")
                         if videobook and src.width >= int(src.height * 1.2):
                             landscapes.append((src.width * src.height, src.copy()))
+                            if src.width * src.height >= 640 * 210:
+                                break
                             continue
                         if fallback is None:
                             fallback = src.copy()
