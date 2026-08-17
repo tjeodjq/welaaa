@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.26"
+PLUGIN_VERSION = "1.1.27"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -171,16 +171,37 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         results = []
         try:
             if parsed.get("web_id"):
-                kinds = [parsed["kind"]] if parsed.get("kind") else ("video", "ebook", "audio")
+                if parsed.get("kind"):
+                    kinds = [parsed["kind"]]
+                elif str(db_type or "").strip().lower() == "videobook":
+                    kinds = ["video"]
+                elif str(db_type or "").strip().lower() in ("ebook", "book"):
+                    kinds = ["ebook"]
+                elif str(db_type or "").strip().lower() in ("audiobook", "audio"):
+                    kinds = ["audio"]
+                else:
+                    kinds = ("video", "ebook", "audio")
+                errors = []
                 for kind in kinds:
-                    item = self.fetch_detail_item(parsed["web_id"], kind, cfg)
+                    try:
+                        item = self.fetch_detail_item(parsed["web_id"], kind, cfg)
+                    except Exception as exc:
+                        errors.append(f"{kind}: {exc}")
+                        continue
                     if item:
                         results.append(item)
+                if not results:
+                    why = "; ".join(errors) if errors else "상세 페이지에 작품 정보가 없습니다"
+                    raise RuntimeError(
+                        f"윌라 ID {parsed['web_id']} 를 열지 못했습니다. ({why})"
+                    )
             else:
                 results.extend(self._search_by_title(parsed["query"], cfg))
+        except RuntimeError:
+            raise
         except Exception as e:
             print(f"[WelaaaMetadataProvider] search failed: {e}")
-            return []
+            raise RuntimeError(f"윌라 검색 실패: {e}") from e
 
         results = self._dedupe(results)
         if not parsed.get("web_id"):
@@ -821,7 +842,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         nxt = self.extract_next_data(html)
         if not nxt:
             print("[WelaaaMetadataProvider] search page missing __NEXT_DATA__")
-            return []
+            raise RuntimeError("윌라 검색 페이지를 읽지 못했습니다. 웹 컨테이너에서 www.welaaa.com 접속을 확인하세요.")
         props = (nxt.get("props") or {}).get("pageProps") or {}
         groups = []
         include_adult = self._truthy(cfg.get("INCLUDE_ADULT"))
@@ -944,6 +965,22 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 time.sleep(0.4 * (attempt + 1))
         raise last_err
 
+    def _html_openers(self, cfg):
+        openers = []
+        try:
+            openers.append(self._opener(cfg))
+        except Exception:
+            openers.append(urllib.request.build_opener())
+        if self._clean_text((cfg or {}).get("PROXY_URL")):
+            return openers
+        try:
+            from services.metadata_refresh_service import MetadataRefreshService
+            openers.append(MetadataRefreshService._image_openers(insecure=False))
+            openers.append(MetadataRefreshService._image_openers(insecure=True))
+        except Exception:
+            pass
+        return openers
+
     def _http_text_once(self, url, cfg, timeout=15):
         headers = {
             "User-Agent": DEFAULT_USER_AGENT,
@@ -955,20 +992,28 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if cookie:
             headers["Cookie"] = cookie
         req = urllib.request.Request(url, headers=headers)
-        opener = self._opener(cfg)
-        with opener.open(req, timeout=timeout) as resp:
-            chunks = []
-            total = 0
-            max_bytes = 4 * 1024 * 1024
-            while True:
-                chunk = resp.read(64 * 1024)
-                if not chunk:
-                    break
-                total += len(chunk)
-                if total > max_bytes:
-                    raise ValueError("윌라 응답이 너무 큽니다.")
-                chunks.append(chunk)
-            return b"".join(chunks).decode("utf-8", "replace")
+        last_err = None
+        for opener in self._html_openers(cfg):
+            try:
+                with opener.open(req, timeout=timeout) as resp:
+                    chunks = []
+                    total = 0
+                    max_bytes = 4 * 1024 * 1024
+                    while True:
+                        chunk = resp.read(64 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ValueError("윌라 응답이 너무 큽니다.")
+                        chunks.append(chunk)
+                    html = b"".join(chunks).decode("utf-8", "replace")
+                if html:
+                    return html
+            except Exception as err:
+                last_err = err
+                continue
+        raise last_err or RuntimeError("윌라 페이지를 가져오지 못했습니다.")
 
     def _opener(self, cfg):
         proxy_url = self._clean_text(cfg.get("PROXY_URL"))
