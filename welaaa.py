@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.18"
+PLUGIN_VERSION = "1.1.19"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -171,7 +171,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         results = []
         try:
             if parsed.get("web_id"):
-                kinds = [parsed["kind"]] if parsed.get("kind") else ("audio", "ebook", "video")
+                kinds = [parsed["kind"]] if parsed.get("kind") else ("video", "ebook", "audio")
                 for kind in kinds:
                     item = self.fetch_detail_item(parsed["web_id"], kind, cfg)
                     if item:
@@ -191,16 +191,22 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         item_data = self._restore_original_title(item_data)
         cfg = self._get_config(db_type)
         web_id = self._clean_text(item_data.get("web_id") or item_data.get("external_id"))
-        kind = self._kind_from_item(item_data)
+        kind = self._kind_from_item(item_data, db_type=db_type)
         if web_id:
             detailed = self.fetch_detail_item(web_id, kind, cfg)
+            if not detailed and kind in ("video", "klass"):
+                other = "klass" if kind == "video" else "video"
+                detailed = self.fetch_detail_item(web_id, other, cfg)
             if detailed:
                 keep_detail_cover = self._is_videobook_cover(
                     db_type, detailed.get("service_type") or item_data.get("service_type")
                 )
                 detail_cover = detailed.get("cover")
                 detail_candidates = list(detailed.get("cover_candidates") or [])
-                item_data = {**detailed, **{k: v for k, v in item_data.items() if v}}
+                incoming = {k: v for k, v in item_data.items() if v}
+                if "/content/" in str(incoming.get("link") or "").lower():
+                    incoming.pop("link", None)
+                item_data = {**detailed, **incoming}
                 item_data = self._restore_original_title(item_data)
                 if keep_detail_cover:
                     # Search hits often only have portrait list thumbs.
@@ -208,6 +214,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                     item_data["cover_candidates"] = (
                         detail_candidates or item_data.get("cover_candidates")
                     )
+                if db_type == "videobook":
+                    item_data["link"] = self._canonical_link(web_id, "video")
 
         gateway = self.get_db_gateway(db_type)
         table = self._media_table(db_type)
@@ -239,6 +247,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             )
             release_date = self._clean_text(item_data.get("pubDate") or item_data.get("release_date"))
             link = item_data.get("link") or ""
+            if table == "videobooks" and web_id:
+                link = self._canonical_link(web_id, "video")
             genre = self._clean_text(item_data.get("genre"))
             tags = self._clean_text(item_data.get("tags"))
             score = self._optional_score(item_data.get("score"))
@@ -356,11 +366,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if not web_id:
             return None
         kind = self._clean_text(parsed.get("kind")) or "video"
+        if kind in ("content",):
+            kind = "video"
         return {
             "provider_id": self.id,
             "web_id": web_id,
             "kind": kind,
-            "link": link,
+            "link": self._canonical_link(web_id, kind),
         }
 
     def refresh(self, db_type, book_id, fields="cover", force_locked=True, ident=None):
@@ -391,11 +403,15 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if parsed:
             ident = parsed
         elif ident and ident.get("web_id"):
+            kind = str(ident.get("kind") or "video").strip() or "video"
+            if kind in ("content",):
+                kind = "video"
+            web_id = str(ident.get("web_id") or "").strip()
             ident = {
                 "provider_id": self.id,
-                "web_id": str(ident.get("web_id") or "").strip(),
-                "kind": str(ident.get("kind") or "video").strip() or "video",
-                "link": str(ident.get("link") or "").strip(),
+                "web_id": web_id,
+                "kind": kind,
+                "link": self._canonical_link(web_id, kind),
             }
         else:
             ident = None
@@ -430,7 +446,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         )
         if not cover_filename:
             return False, "표지를 저장하지 못했습니다."
-        link = self._clean_text(detailed.get("link") or ident.get("link"))
+        link = self._canonical_link(ident["web_id"], ident.get("kind") or "video")
         gateway.execute(
             f"""
             UPDATE {table}
@@ -512,6 +528,15 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if ID_RE.match(text):
             return {"query": "", "web_id": text, "kind": ""}
         return {"query": text, "web_id": "", "kind": ""}
+
+    @staticmethod
+    def _canonical_link(web_id, kind="video"):
+        web_id = str(web_id or "").strip()
+        kind = str(kind or "video").strip().lower()
+        if kind in ("content", "class", "course", "videobook", ""):
+            kind = "video"
+        info = KIND_INFO.get(kind) or KIND_INFO["video"]
+        return f"{SITE}/{info['path']}/detail/{web_id}" if web_id else SITE
 
     def fetch_detail_item(self, web_id, kind, cfg):
         kind = self._normalize_kind(kind)
@@ -1018,27 +1043,38 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         result["title"] = original
         return result
 
-    def _kind_from_item(self, item):
+    def _kind_from_item(self, item, db_type=None):
+        link = self._clean_text((item or {}).get("link")).lower()
+        if db_type == "videobook":
+            if "/ebook/" in link:
+                return "ebook"
+            if "/audio/" in link and "/video/" not in link and "/content/" not in link:
+                return "audio"
+            return "klass"
         service = self._clean_text((item or {}).get("service_type")).lower()
         for kind, info in KIND_INFO.items():
             if service == info["service"] or service == kind:
                 return kind
-        link = self._clean_text((item or {}).get("link")).lower()
         if "/ebook/" in link:
             return "ebook"
-        if "/video/" in link:
+        if "/video/" in link or "/content/" in link:
             return "klass"
+        if "/audio/" in link:
+            return "audio"
         return "audio"
 
     def _normalize_kind(self, kind):
-        raw = str(kind or "audio").strip().lower()
+        raw = str(kind or "").strip().lower()
         aliases = {
             "audiobook": "audio",
             "class": "klass",
             "course": "klass",
             "videobook": "video",
+            "content": "video",
         }
         raw = aliases.get(raw, raw)
+        if not raw:
+            return "video"
         return raw if raw in KIND_INFO else "audio"
 
     def _kind_from_course(self, course, requested):
