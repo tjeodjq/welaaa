@@ -14,7 +14,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.12"
+PLUGIN_VERSION = "1.1.13"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -429,6 +429,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             UPDATE {table}
             SET cover_image = ?,
                 cover_updated_at = CURRENT_TIMESTAMP,
+                metadata_locked = 1,
                 link = CASE WHEN TRIM(COALESCE(?, '')) = '' THEN link ELSE ? END
             WHERE id = ? AND COALESCE(is_deleted, 0) = 0
             """,
