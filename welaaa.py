@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.23"
+PLUGIN_VERSION = "1.1.24"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -225,6 +225,16 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                         merged.append(url)
                     item_data["cover_candidates"] = merged
                     item_data["cover"] = detail_cover or incoming.get("cover") or (merged[0] if merged else "")
+                    land = []
+                    seen_land = set()
+                    for value in detailed.get("landscape_covers") or []:
+                        url = self._cover_http(value)
+                        if not url or url in seen_land or self._is_dead_course_thumb(url):
+                            continue
+                        seen_land.add(url)
+                        land.append(url)
+                    if land:
+                        item_data["landscape_covers"] = land
                 if db_type == "videobook":
                     item_data["link"] = self._canonical_link(web_id, "video")
 
@@ -242,13 +252,14 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if not book:
                 return False, "대상 도서를 찾을 수 없습니다."
 
+            land = list(item_data.get("landscape_covers") or [])
             cover_filename = self._save_cover(
                 book,
-                item_data.get("cover"),
+                (land[0] if land else item_data.get("cover")),
                 cfg,
                 db_type,
                 item_data.get("service_type"),
-                item_data.get("cover_candidates"),
+                land or item_data.get("cover_candidates"),
             )
             description = self._clean_text(item_data.get("description"))
             author = self._clean_text(item_data.get("author"))
@@ -445,6 +456,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if "text" in field_set:
             return self.apply(db_type, book_id, detailed)
 
+        land = list(detailed.get("landscape_covers") or [])
         cover_filename = self._save_cover(
             {
                 "id": self._row_value(row, "id"),
@@ -453,11 +465,11 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 "series_name": self._row_value(row, "series_name"),
                 "cover_image": self._row_value(row, "cover_image"),
             },
-            detailed.get("cover"),
+            (land[0] if land else detailed.get("cover")),
             cfg,
             db_type,
             detailed.get("service_type"),
-            detailed.get("cover_candidates"),
+            land or detailed.get("cover_candidates"),
         )
         if not cover_filename:
             return False, "표지를 저장하지 못했습니다."
@@ -598,6 +610,15 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if merged:
                 item["cover"] = merged[0]
                 item["cover_candidates"] = merged
+        land = []
+        seen_land = set()
+        for value in harvested:
+            url = self._cover_http(value)
+            if not url or url in seen_land or self._is_dead_course_thumb(url):
+                continue
+            seen_land.add(url)
+            land.append(url)
+        item["landscape_covers"] = land
         return item
 
     @staticmethod
@@ -917,19 +938,24 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             fallback = None
             cookie = self._clean_text(cfg.get("WELAAA_COOKIE"))
             last_err = None
+            tried = 0
             for cover_url in urls:
                 if videobook and self._is_dead_course_thumb(cover_url):
                     continue
+                low = cover_url.lower()
+                if videobook and ("klass-cover-alt" in low or "cover-alt" in low):
+                    continue
                 if (
                     videobook
-                    and "new_images" not in cover_url.lower()
+                    and "new_images" not in low
                     and self._cover_score(cover_url, course=True) < 0
                     and landscapes
                 ):
                     break
+                tried += 1
                 try:
                     img_data = None
-                    last_err = None
+                    download_err = None
                     try:
                         from services.metadata_refresh_service import MetadataRefreshService
                         img_data = MetadataRefreshService._http_image(
@@ -939,7 +965,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                             referer=f"{SITE}/video/detail/",
                         )
                     except Exception as err:
-                        last_err = err
+                        download_err = err
                     if img_data is None:
                         for attempt in range(2):
                             try:
@@ -947,25 +973,26 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                                     cover_url,
                                     headers={
                                         "User-Agent": DEFAULT_USER_AGENT,
-                                        "Referer": f"{SITE}/",
-                                        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                                        "Referer": f"{SITE}/video/detail/",
+                                        "Accept": "image/jpeg,image/png,image/webp,image/*,*/*;q=0.8",
                                     },
                                 )
                                 if cookie:
                                     req.add_header("Cookie", cookie)
                                 with opener.open(req, timeout=15) as response:
                                     img_data = response.read()
-                                last_err = None
+                                download_err = None
                                 break
                             except Exception as err:
-                                last_err = err
+                                download_err = err
                                 time.sleep(0.4 * (attempt + 1))
                     if img_data is None:
-                        raise last_err or RuntimeError("cover download failed")
+                        raise download_err or RuntimeError("cover download failed")
                     with Image.open(io.BytesIO(img_data)) as img:
                         src = img.convert("RGB")
                         if videobook and src.width >= int(src.height * 1.2):
                             landscapes.append((src.width * src.height, src.copy()))
+                            last_err = None
                             if src.width * src.height >= 640 * 210:
                                 break
                             continue
@@ -978,7 +1005,12 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 if not landscapes:
                     folder_src = self._folder_landscape_poster(book.get("file_path"))
                     if folder_src is None:
-                        self._last_cover_error = str(last_err or "no landscape")
+                        if last_err:
+                            self._last_cover_error = str(last_err)
+                        elif tried == 0:
+                            self._last_cover_error = "no landscape urls"
+                        else:
+                            self._last_cover_error = f"no landscape (tried {tried})"
                         print("[WelaaaMetadataProvider] no landscape cover candidate; skip portrait fallback")
                         return None
                     src = folder_src
