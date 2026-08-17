@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.21"
+PLUGIN_VERSION = "1.1.22"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -577,7 +577,26 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             book = dict(book)
             book["og_image"] = og
         resolved = self._kind_from_course(book, kind)
-        return self.item_from_book(book, resolved)
+        item = self.item_from_book(book, resolved)
+        harvested = []
+        try:
+            from tools.scanner.metadata.welaaa_json import landscape_cover_urls_from_course
+            harvested = landscape_cover_urls_from_course(book) or []
+        except Exception:
+            harvested = []
+        if harvested:
+            merged = []
+            seen = set()
+            for value in [*harvested, item.get("cover"), *(item.get("cover_candidates") or [])]:
+                url = self._cover_http(value)
+                if not url or url in seen or self._is_dead_course_thumb(url):
+                    continue
+                seen.add(url)
+                merged.append(url)
+            if merged:
+                item["cover"] = merged[0]
+                item["cover_candidates"] = merged
+        return item
 
     @staticmethod
     def _og_image(html):
@@ -898,24 +917,46 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             for cover_url in urls:
                 if videobook and self._is_dead_course_thumb(cover_url):
                     continue
-                if videobook and self._cover_score(cover_url, course=True) < 0 and landscapes:
+                if (
+                    videobook
+                    and "new_images" not in cover_url.lower()
+                    and self._cover_score(cover_url, course=True) < 0
+                    and landscapes
+                ):
                     break
                 try:
-                    headers = {"User-Agent": DEFAULT_USER_AGENT, "Referer": f"{SITE}/"}
-                    if cookie:
-                        headers["Cookie"] = cookie
                     img_data = None
                     last_err = None
-                    for attempt in range(2):
-                        try:
-                            req = urllib.request.Request(cover_url, headers=headers)
-                            with opener.open(req, timeout=15) as response:
-                                img_data = response.read()
-                            last_err = None
-                            break
-                        except Exception as err:
-                            last_err = err
-                            time.sleep(0.4 * (attempt + 1))
+                    try:
+                        from services.metadata_refresh_service import MetadataRefreshService
+                        img_data = MetadataRefreshService._http_image(
+                            cover_url,
+                            opener=opener,
+                            cookie=cookie,
+                            referer=f"{SITE}/video/detail/",
+                        )
+                    except Exception as err:
+                        last_err = err
+                    if img_data is None:
+                        for attempt in range(2):
+                            try:
+                                req = urllib.request.Request(
+                                    cover_url,
+                                    headers={
+                                        "User-Agent": DEFAULT_USER_AGENT,
+                                        "Referer": f"{SITE}/",
+                                        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                                    },
+                                )
+                                if cookie:
+                                    req.add_header("Cookie", cookie)
+                                with opener.open(req, timeout=15) as response:
+                                    img_data = response.read()
+                                last_err = None
+                                break
+                            except Exception as err:
+                                last_err = err
+                                time.sleep(0.4 * (attempt + 1))
                     if img_data is None:
                         raise last_err or RuntimeError("cover download failed")
                     with Image.open(io.BytesIO(img_data)) as img:

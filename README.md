@@ -3,7 +3,7 @@
 BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 | 항목 | 값 |
 | :--- | :--- |
-| 플러그인 버전 | `1.1.21` |
+| 플러그인 버전 | `1.1.22` |
 | 플러그인 ID | `welaaa` |
 | 클래스 | `WelaaaMetadataProvider` |
 | 유형 | 검색형 메타데이터 제공자 |
@@ -20,7 +20,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 
 ### ZIP 설치
 
-1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.21.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
+1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.22.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
 2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 
 설치 후 목록에서 `윌라 도서 검색`을 활성화하고, 도서 우클릭 메타 검색에서 선택합니다.
