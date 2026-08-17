@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.25"
+PLUGIN_VERSION = "1.1.26"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -362,7 +362,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 )
 
             extra = f" (시리즈 표지 {len(series_cover_updates)}권)" if series_cover_updates else ""
-            if table == "videobooks":
+            if table == "videobooks" and cover_filename:
                 self._sync_videobook_folder_meta(book, item_data)
             if table == "videobooks" and not cover_filename:
                 why = self._clean_text(getattr(self, "_last_cover_error", ""))
@@ -641,9 +641,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 landscape_cover_urls_from_course,
                 landscape_cover_urls_from_html,
             )
-            harvested = landscape_cover_urls_from_course(book) or []
-            if not harvested:
-                harvested = landscape_cover_urls_from_html(html) or []
+            for value in (
+                *(landscape_cover_urls_from_course(book) or []),
+                *(landscape_cover_urls_from_html(html) or []),
+            ):
+                url = self._cover_http(value)
+                if url and url not in harvested and not self._is_dead_course_thumb(url):
+                    harvested.append(url)
         except Exception:
             harvested = []
         if harvested:
@@ -752,6 +756,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             "external_id": web_id,
             "service_type": info["service"],
             "raw_title": self._clean_text(book.get("title")),
+            "images": book.get("images") if isinstance(book.get("images"), dict) else {},
         }
 
     def item_from_search_hit(self, hit, kind):
@@ -1399,6 +1404,10 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                     return found
             return ""
         url = self._clean_text(value)
+        if url.startswith("://"):
+            url = "https" + url
+        elif url.startswith("//"):
+            url = "https:" + url
         if url.startswith("http") and "placeholder" not in url.lower() and not url.endswith("/"):
             return url
         return ""
