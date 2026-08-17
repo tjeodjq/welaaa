@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.24"
+PLUGIN_VERSION = "1.1.25"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -252,14 +252,20 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             if not book:
                 return False, "대상 도서를 찾을 수 없습니다."
 
-            land = list(item_data.get("landscape_covers") or [])
+            land = self._merge_cover_urls(item_data.get("landscape_covers"))
+            rest = self._merge_cover_urls(
+                item_data.get("cover"),
+                item_data.get("cover_candidates"),
+            )
+            cover_urls = land + [url for url in rest if url not in land]
             cover_filename = self._save_cover(
                 book,
-                (land[0] if land else item_data.get("cover")),
+                (cover_urls[0] if cover_urls else item_data.get("cover")),
                 cfg,
                 db_type,
                 item_data.get("service_type"),
-                land or item_data.get("cover_candidates"),
+                cover_urls,
+                web_id=web_id,
             )
             description = self._clean_text(item_data.get("description"))
             author = self._clean_text(item_data.get("author"))
@@ -456,7 +462,9 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if "text" in field_set:
             return self.apply(db_type, book_id, detailed)
 
-        land = list(detailed.get("landscape_covers") or [])
+        land = self._merge_cover_urls(detailed.get("landscape_covers"))
+        rest = self._merge_cover_urls(detailed.get("cover"), detailed.get("cover_candidates"))
+        cover_urls = land + [url for url in rest if url not in land]
         cover_filename = self._save_cover(
             {
                 "id": self._row_value(row, "id"),
@@ -465,11 +473,12 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 "series_name": self._row_value(row, "series_name"),
                 "cover_image": self._row_value(row, "cover_image"),
             },
-            (land[0] if land else detailed.get("cover")),
+            (cover_urls[0] if cover_urls else detailed.get("cover")),
             cfg,
             db_type,
             detailed.get("service_type"),
-            land or detailed.get("cover_candidates"),
+            cover_urls,
+            web_id=ident.get("web_id"),
         )
         if not cover_filename:
             return False, "표지를 저장하지 못했습니다."
@@ -576,7 +585,24 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return None
         nxt = self.extract_next_data(html)
         if not nxt:
-            return None
+            harvested = []
+            try:
+                from tools.scanner.metadata.welaaa_json import landscape_cover_urls_from_html
+                harvested = landscape_cover_urls_from_html(html) or []
+            except Exception:
+                harvested = []
+            if not harvested:
+                return None
+            return {
+                "web_id": str(web_id),
+                "title": self._og_title(html) or str(web_id),
+                "cover": harvested[0],
+                "cover_candidates": list(harvested),
+                "landscape_covers": list(harvested),
+                "link": self._canonical_link(web_id, "video"),
+                "service_type": "klass",
+                "publisher": "윌라",
+            }
         page = str(nxt.get("page") or "")
         if "content-expiration" in page:
             return None
@@ -585,7 +611,24 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if not isinstance(book, dict):
             book = props.get("book") or props.get("ebook") or props.get("course")
         if not isinstance(book, dict) or not book.get("title"):
-            return None
+            harvested = []
+            try:
+                from tools.scanner.metadata.welaaa_json import landscape_cover_urls_from_html
+                harvested = landscape_cover_urls_from_html(html) or []
+            except Exception:
+                harvested = []
+            if not harvested:
+                return None
+            return {
+                "web_id": str(web_id),
+                "title": self._og_title(html) or str(web_id),
+                "cover": harvested[0],
+                "cover_candidates": list(harvested),
+                "landscape_covers": list(harvested),
+                "link": self._canonical_link(web_id, "video"),
+                "service_type": "klass",
+                "publisher": "윌라",
+            }
         og = self._og_image(html)
         if og:
             book = dict(book)
@@ -594,8 +637,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         item = self.item_from_book(book, resolved)
         harvested = []
         try:
-            from tools.scanner.metadata.welaaa_json import landscape_cover_urls_from_course
+            from tools.scanner.metadata.welaaa_json import (
+                landscape_cover_urls_from_course,
+                landscape_cover_urls_from_html,
+            )
             harvested = landscape_cover_urls_from_course(book) or []
+            if not harvested:
+                harvested = landscape_cover_urls_from_html(html) or []
         except Exception:
             harvested = []
         if harvested:
@@ -620,6 +668,22 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             land.append(url)
         item["landscape_covers"] = land
         return item
+
+    @staticmethod
+    def _og_title(html):
+        text = str(html or "")
+        match = re.search(
+            r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',
+            text,
+            re.I,
+        )
+        if not match:
+            match = re.search(
+                r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:title["\']',
+                text,
+                re.I,
+            )
+        return unescape(match.group(1)).strip() if match else ""
 
     @staticmethod
     def _og_image(html):
@@ -911,7 +975,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
         return urllib.request.build_opener(handler)
 
-    def _save_cover(self, book, cover_url, cfg, db_type=None, service_type=None, cover_candidates=None):
+    def _save_cover(self, book, cover_url, cfg, db_type=None, service_type=None, cover_candidates=None, web_id=None):
         urls = []
         seen = set()
         for value in [cover_url, *(cover_candidates or [])]:
@@ -937,8 +1001,11 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             landscapes = []
             fallback = None
             cookie = self._clean_text(cfg.get("WELAAA_COOKIE"))
+            referer = f"{SITE}/video/detail/{web_id}" if web_id else f"{SITE}/video/detail/"
             last_err = None
             tried = 0
+            last_got = ""
+            last_name = ""
             for cover_url in urls:
                 if videobook and self._is_dead_course_thumb(cover_url):
                     continue
@@ -962,7 +1029,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                             cover_url,
                             opener=opener,
                             cookie=cookie,
-                            referer=f"{SITE}/video/detail/",
+                            referer=referer,
                         )
                     except Exception as err:
                         download_err = err
@@ -973,7 +1040,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                                     cover_url,
                                     headers={
                                         "User-Agent": DEFAULT_USER_AGENT,
-                                        "Referer": f"{SITE}/video/detail/",
+                                        "Referer": referer,
                                         "Accept": "image/jpeg,image/png,image/webp,image/*,*/*;q=0.8",
                                     },
                                 )
@@ -990,6 +1057,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                         raise download_err or RuntimeError("cover download failed")
                     with Image.open(io.BytesIO(img_data)) as img:
                         src = img.convert("RGB")
+                        last_got = f"{src.width}x{src.height}"
+                        last_name = os.path.basename(str(cover_url).split("?", 1)[0])
                         if videobook and src.width >= int(src.height * 1.2):
                             landscapes.append((src.width * src.height, src.copy()))
                             last_err = None
@@ -1010,7 +1079,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                         elif tried == 0:
                             self._last_cover_error = "no landscape urls"
                         else:
-                            self._last_cover_error = f"no landscape (tried {tried})"
+                            extra = f", got {last_got} {last_name}".rstrip() if last_got else ""
+                            self._last_cover_error = f"no landscape (tried {tried}{extra})"
                         print("[WelaaaMetadataProvider] no landscape cover candidate; skip portrait fallback")
                         return None
                     src = folder_src
@@ -1332,6 +1402,20 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
         if url.startswith("http") and "placeholder" not in url.lower() and not url.endswith("/"):
             return url
         return ""
+
+    def _merge_cover_urls(self, *groups):
+        urls = []
+        seen = set()
+        for group in groups:
+            if isinstance(group, str):
+                group = [group]
+            for value in group or []:
+                url = self._cover_http(value)
+                if not url or url in seen or self._is_dead_course_thumb(url):
+                    continue
+                seen.add(url)
+                urls.append(url)
+        return urls
 
     @staticmethod
     def _widen_cover_url(url):
