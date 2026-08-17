@@ -15,7 +15,7 @@ from html import unescape
 from PIL import Image, ImageEnhance, ImageFilter
 from plugins.metadata.base import BaseMetadataProvider
 
-PLUGIN_VERSION = "1.1.28"
+PLUGIN_VERSION = "1.1.29"
 POSTER_WIDTH = 600
 POSTER_HEIGHT = 900
 VIDEOBOOK_POSTER_MAX_W = 1920
@@ -274,14 +274,19 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 return False, "대상 도서를 찾을 수 없습니다."
 
             land = self._merge_cover_urls(item_data.get("landscape_covers"))
-            rest = self._merge_cover_urls(
-                item_data.get("cover"),
-                item_data.get("cover_candidates"),
-            )
-            cover_urls = land + [url for url in rest if url not in land]
+            if db_type == "videobook":
+                cover_urls = land
+                first_cover = cover_urls[0] if cover_urls else ""
+            else:
+                rest = self._merge_cover_urls(
+                    item_data.get("cover"),
+                    item_data.get("cover_candidates"),
+                )
+                cover_urls = land + [url for url in rest if url not in land]
+                first_cover = cover_urls[0] if cover_urls else item_data.get("cover")
             cover_filename = self._save_cover(
                 book,
-                (cover_urls[0] if cover_urls else item_data.get("cover")),
+                first_cover,
                 cfg,
                 db_type,
                 item_data.get("service_type"),
@@ -484,8 +489,13 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             return self.apply(db_type, book_id, detailed)
 
         land = self._merge_cover_urls(detailed.get("landscape_covers"))
-        rest = self._merge_cover_urls(detailed.get("cover"), detailed.get("cover_candidates"))
-        cover_urls = land + [url for url in rest if url not in land]
+        if db_type == "videobook":
+            cover_urls = land
+            first_cover = cover_urls[0] if cover_urls else ""
+        else:
+            rest = self._merge_cover_urls(detailed.get("cover"), detailed.get("cover_candidates"))
+            cover_urls = land + [url for url in rest if url not in land]
+            first_cover = cover_urls[0] if cover_urls else detailed.get("cover")
         cover_filename = self._save_cover(
             {
                 "id": self._row_value(row, "id"),
@@ -494,7 +504,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                 "series_name": self._row_value(row, "series_name"),
                 "cover_image": self._row_value(row, "cover_image"),
             },
-            (cover_urls[0] if cover_urls else detailed.get("cover")),
+            first_cover,
             cfg,
             db_type,
             detailed.get("service_type"),
@@ -1119,6 +1129,8 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
                             if src.width * src.height >= 640 * 210:
                                 break
                             continue
+                        if videobook:
+                            continue
                         if fallback is None:
                             fallback = src.copy()
                 except Exception as err:
@@ -1153,6 +1165,20 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             poster.save(dest_path, "WEBP", quality=82)
             if videobook:
                 self._write_folder_poster(book.get("file_path"), poster)
+                try:
+                    from services.metadata_refresh_service import MetadataRefreshService
+                    MetadataRefreshService._delete_portrait_cover_file(
+                        book, keep_rel=cover_filename
+                    )
+                    MetadataRefreshService._overwrite_folder_portrait_posters(
+                        {
+                            "file_path": book.get("file_path") if isinstance(book, dict) else self._row_value(book, "file_path"),
+                            "cover_image": book.get("cover_image") if isinstance(book, dict) else self._row_value(book, "cover_image"),
+                        },
+                        poster,
+                    )
+                except Exception:
+                    pass
             self._last_cover_error = ""
             return cover_filename
         except Exception as e:
@@ -1556,8 +1582,7 @@ class WelaaaMetadataProvider(BaseMetadataProvider):
             print(f"[WelaaaMetadataProvider] folder JSON helper missing: {err}")
             return
         cover_url = pick_applied_cover_url(
-            (item_data or {}).get("cover"),
-            (item_data or {}).get("cover_candidates"),
+            (item_data or {}).get("landscape_covers"),
         )
         updates = {
             "type": "klass",

@@ -3,7 +3,7 @@
 BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 | 항목 | 값 |
 | :--- | :--- |
-| 플러그인 버전 | `1.1.28` |
+| 플러그인 버전 | `1.1.29` |
 | 플러그인 ID | `welaaa` |
 | 클래스 | `WelaaaMetadataProvider` |
 | 유형 | 검색형 메타데이터 제공자 |
@@ -20,7 +20,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 
 ### ZIP 설치
 
-1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.28.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
+1. [Releases](https://github.com/tjeodjq/welaaa/releases)에서 `welaaa-1.1.29.zip`을 받습니다. 비공개 저장소는 Git URL 설치가 되지 않으므로 ZIP을 사용하세요.
 2. BookOasis **환경설정 → 플러그인 매니저 → ZIP 설치**로 올립니다.
 
 설치 후 목록에서 `윌라 도서 검색`을 활성화하고, 도서 우클릭 메타 검색에서 선택합니다.
@@ -44,7 +44,7 @@ BookOasis용 윌라(welaaa.com) 메타데이터 검색 플러그인입니다.
 
 ## 식별자 기반 새로고침
 
-비디오북 Health/카테고리의 「메타·포스터 새로고침」과 수동 검색 적용은 제목 검색 없이 `link`의 web_id로 상세를 가져옵니다. 적용 결과는 DB뿐 아니라 폴더 윌라 JSON(`cover_url`, `link`, 저자·소개)과 가로 `poster.jpg` 에도 덮어씁니다. `https://www.welaaa.com/content/{id}` 는 `https://www.welaaa.com/video/detail/{id}` 로 바꿉니다. 클래스 가로 배너는 상세 `cover_image_info_list`의 klass-cover 원본과 `images.wide`(`://static...` 포함)를 받고, 폴더 JSON의 세로 `new_images`나 og:image 는 쓰지 않습니다. 403이 나는 `/static/courses/*_wide.jpg` 는 건너뜁니다. 가로 저장이 실패하면 실제 다운로드 오류를 남깁니다.
+비디오북 Health/카테고리의 「메타·포스터 새로고침」과 수동 검색 적용은 제목 검색 없이 `link`의 web_id로 상세를 가져옵니다. 적용 결과는 DB뿐 아니라 폴더 윌라 JSON(`cover_url`, `link`, 저자·소개)과 가로 `poster.jpg` 에도 덮어씁니다. 세로 썸네일(`cover.jpg` 등)은 표지 후보로 쓰지 않고, 가로 배너를 받으면 기존 세로 표지 파일을 지우고 가로로 덮어씁니다. `https://www.welaaa.com/content/{id}` 는 `https://www.welaaa.com/video/detail/{id}` 로 바꿉니다. 클래스 가로 배너는 상세 `cover_image_info_list`의 klass-cover 원본과 `images.wide`(`://static...` 포함)를 받고, 폴더 JSON의 세로 `new_images`나 og:image 는 쓰지 않습니다. 403이 나는 `/static/courses/*_wide.jpg` 는 건너뜁니다. 가로 저장이 실패하면 실제 다운로드 오류를 남깁니다. 이미 가로 `welaaa_*` 표지가 있으면 표지는 재다운로드하지 않습니다.
 
 ## 설정
 
